@@ -2,10 +2,3 @@
 # IDE 配置
 # ========================
 .vscode/
-.idea/
-.git/
-.lingma/
-build/
-.venv/
-.本地/
-.vs/
