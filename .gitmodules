@@ -1,0 +1,6 @@
+[submodule "OpenAirymax"]
+	path = OpenAirymax
+	url = git@atomgit.com:openairymax/airymaxhub.git
+[submodule "SpharxTools"]
+	path = SpharxTools
+	url = git@atomgit.com:spharx/spharxtools.git
