@@ -2,3 +2,6 @@
 # IDE 配置
 # ========================
 .vscode/
+.idea/
+.rustup/
+.cargo/
