@@ -11,7 +11,7 @@ SpharxWorks 是 SPHARX 极光感知科技打造的数据智能基础设施，有
 
 
 **OpenAirymax** 
-- AgentOS [智能体底层操作系统](OpenAirymax/AgentOS/README_zh.md)   
+- AgentOS [智能体底层操作系统](https://atomgit.com/openairymax/agentos)   
 
 **SpharxTools** 
 - Workshop [物理世界数据工厂](SpharxTools/Workshop/README.md) 
