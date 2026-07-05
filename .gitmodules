@@ -1,6 +1,12 @@
-[submodule "OpenAirymax"]
-	path = OpenAirymax
-	url = git@atomgit.com:openairymax/airymaxhub.git
-[submodule "SpharxTools"]
-	path = SpharxTools
-	url = git@atomgit.com:spharx/spharxtools.git
+[submodule "desktop"]
+        path = desktop
+        url = git@atomgit.com:openairymax/desktop.git
+        branch = feature/official-hubs-01
+[submodule "docker"]
+        path = docker
+        url = git@atomgit.com:openairymax/docker.git
+        branch = feature/official-hubs-01
+[submodule "memoryrovol"]
+        path = memoryrovol
+        url = git@atomgit.com:spharx/memoryrovol.git
+        branch = feature/official-hubs-01
