@@ -1,402 +1,83 @@
-# SpharxWorks 数据智能基础设施
+# Airymax Products — Packaging & Distribution
 
-## 1 项目简介
+> Product packaging layer for the Airymax AI Agent Runtime Platform.
+> One of four management repositories under the [airymaxhub](https://atomgit.com/openairymax/airymaxhub) umbrella.
 
-SpharxWorks 是 SPHARX极光感知 打造的数据智能基础设施，两大核心模块：
+**Language:** English | [简体中文](README_zh.md)
 
-- **OpenAirymax**：群体智能的底层支撑，开源的 AgentOS
-- **SpharxTools**：物理世界数据生产工具链
+[![Version](https://img.shields.io/badge/version-0.1.1-5a6b7e)](https://atomgit.com/openairymax/products)
+[![License](https://img.shields.io/badge/license-AGPL--3.0+Apache--2.0-4a90d9)](LICENSE)
 
-## 2 项目导航
+---
 
-**OpenAirymax**
+## Overview
 
-- AgentOS [智能体操作系统](https://atomgit.com/openairymax/agentos)
+The **Products management repo** aggregates Airymax's product packaging: the desktop application, Docker deployment images, and the commercial MemoryRovol memory provider. These are the deliverable artifacts that end users install and deploy.
 
-**SpharxTools**
+## Leaf Repositories
 
-- Workshop [数据工厂](SpharxTools/Workshop/README.md)
-- Deepness [深度加工](SpharxTools/Deepness/README.md)
-- Benchmark [评测工具](SpharxTools/Benchmark/README.md)
+| Module | Repository | License | Description |
+|--------|-----------|---------|-------------|
+| **desktop** | `git@atomgit.com:openairymax/desktop.git` | AGPL v3 + Apache 2.0 | Desktop application (personal client) |
+| **docker** | `git@atomgit.com:openairymax/docker.git` | AGPL v3 + Apache 2.0 | Docker deployment images & docker-compose |
+| **memoryrovol** | `git@atomgit.com:spharx/memoryrovol.git` | SPHARX EULA v1.0 | Commercial memory provider (closed-source, C-class isolation layer) |
 
-## 3 什么是 SpharxWorks ？
+> **Note**: `memoryrovol` belongs to the `spharx` organization (not `openairymax`) and is licensed under a commercial EULA. All other repositories in the Airymax project use the AGPL v3 + Apache 2.0 dual license.
 
-SpharxWorks 是一个完整的数据智能基础设施，旨在构建人工智能时代的物理世界数据处理标准。它通过整合物理世界数据采集、处理与智能体操作系统，为 AI 应用提供从原始数据到智能决策的全链路解决方案。
-
-### 3.1 核心价值
-
-1. 从物理世界数据采集到智能决策的完整闭环
-2. 领先的物理世界理解和智能体操作系统技术
-3. 开放的生态系统，支持多行业应用场景
-4. 为企业提供数据驱动的智能解决方案
-
-## 4 核心项目介绍
-
-### 4.1 AgentOS 智能体底层操作系统
-
-**定位**：成为人类计算工程史上，第四个"操作系统哲学"
-
-AgentOS 是一个智能体底层操作系统，为驱动智能体团队提供完整的操作系统级支持。基于基石理论《体系并行论》构建，实现了从内核到应用的完整架构。
-
-#### 4.1.1 创新要点
-
-- **纯净内核**：内核仅提供原子机制，纯净高效，内核代码量仅 \~25K LOC
-- **认知循环**：认知、规划、行动的智能体行为模式
-- **记忆卷载**：原始层、特征层、结构层、模式层的四层记忆系统
-- **安全内生**：沙箱隔离、权限裁决、输入净化、审计追踪的四重安全体系
-- **高效 Token**：工程级比传统框架节省约 **500%** 的 Token 消耗
-- **丰富 SDK**：原生支持 Go、Python、Rust、TypeScript 四种编程语言
-
-#### 4.1.2 系统架构
+## Architecture
 
 ```
-⬇️ 应用层 (openlab)    - 用户交互与应用逻辑
-⇅ 服务层 (daemon)      - 后台服务与守护进程
-⇅ 内核层 (atoms)       - 核心原子机制与系统调用
-⇅ 安全层 (cupolas)     - 安全穹顶与权限管理
-⇅ 支撑层 (commons)     - 公共库与基础设施
-⬆️ SDK 层 (toolkit)    - 多语言开发工具包
+products/
+├── desktop/       ← Desktop application (personal client)
+├── docker/        ← Docker images & deployment configs
+├── memoryrovol/   ← Commercial memory provider (SPHARX EULA)
+├── .gitmodules
+└── README.md      ← This file
 ```
 
-#### 4.1.3 设计原则
+### Module Details
 
-基于 ARCHITECTURAL\_PRINCIPLES 构建，遵循五维正交体系：
+#### desktop
 
-- **系统观**：反馈闭环 · 层次分解 · 总体设计部 · 涌现管理 → 实时响应 <10ms
-- **内核观**：内核极简 · 接口契约化 · 服务隔离 · 可插拔策略 → 内核 \~25K LOC
-- **认知观**：双系统协同 · 增量演化 · 记忆卷载 · 遗忘机制 → Token 节省 500%
-- **工程观**：安全内生 · 可观测性 · 资源确定性 · 跨平台一致 → 测试覆盖 >90%
-- **设计美学**：简约至上 · 极致细节 · 人文关怀 · 完美主义 → API <50 个/模块
+The desktop application provides a personal client for interacting with the Airymax runtime. It is built on top of the SDK layer and provides a graphical interface for agent management, task submission, and result visualization.
 
-#### 4.1.4 与传统框架对比
+- **Upstream**: SDK (`sdk/`), runtime (`agentrt/`)
+- **Downstream**: End users (personal users)
 
-| 维度           | AgentOS    | 传统框架  |
-| ------------ | ---------- | ----- |
-| **定位**       | 多智能体协作 OS  | 单一智能体 |
-| **架构**       | 微内核 + 严格分层 | 松耦合模块 |
-| **安全**       | 四重内生安全     | 应用层防护 |
-| **记忆**       | 四层卷载系统     | 向量数据库 |
-| **Token 效率** | 节省约 500%   | 无优化   |
+#### docker
 
-#### 4.1.5 应用场景
+The Docker module provides containerized deployment for the Airymax runtime. It includes Dockerfiles, docker-compose configurations, and deployment scripts for production environments.
 
-**✅ 特别适合**
+- **Upstream**: Runtime (`agentrt/`), ecosystem configs (`ecosystem/manager/`)
+- **Downstream**: Operators, enterprise deployments
 
-- 🎯 复杂多步骤任务编排
-- 🧠 长期记忆与知识积累需求
-- 🔒 高安全性企业应用
-- 💾 资源受限嵌入式场景 (atomslite)
-- 🌐 多语言开发团队
+#### memoryrovol
 
-**❌ 不适合**
+MemoryRovol is the commercial memory provider for Airymax, implementing the L3 (Structure) and L4 (Pattern) memory layers. It is a **closed-source** product licensed under the SPHARX Commercial EULA v1.0, with authorization tiers: Trial / Pro / Enterprise / Enterprise+.
 
-- 简单单次调用任务（杀鸡用牛刀）
+- **Upstream**: `atoms/memoryrovol/` bridge API (weak symbol)
+- **Downstream**: Runtime (via `AGENTRT_WITH_MEMORYROVOL=ON` CMake option)
+- **SPDX**: `LicenseRef-SPHARX-MemoryRovol-EULA-1.0`
 
-***
-
-### 4.2 Workshop 物理世界数据工厂
-
-**定位**：构建 AI 时代的物理世界数据基础设施
-
-Workshop V3.0 是 SpharxWorks 平台的核心数据采集和预处理子系统，基于 AgentOS 微内核架构和 Deepness 模块化设计构建，采用五层架构设计。从原始传感器数据到标准化高质量数据集，实现完整处理链路。
-
-#### 4.2.1 核心特性
-
-- **五层架构**：Core → Commons → Orchestration → Services → Pipelines
-- **模块化设计**：基于 BasePipeline ABC 的标准化管道框架
-- **生产级质量**：100+ 错误码体系，输入验证覆盖率 99%
-- **安全内生**：SQL/XSS 检测、路径遍历防护、审计日志
-- **可观测性**：分布式追踪、性能监控、健康检查
-- **DevOps 完善**：GitHub Actions CI/CD，Docker 多阶段构建
-
-#### 4.2.2 系统架构
-
-**V3.0 五层架构** · 参考 AgentOS 和 Deepness 设计模式
+## Memory Stratification
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Pipelines 层                         │
-│    run_00_ingest → run_01_quality → ... → delivery      │
-├─────────────────────────────────────────────────────────┤
-│                    Services 层                          │
-│         Gateway · Monitor · Exporter                    │
-├─────────────────────────────────────────────────────────┤
-│                  Orchestration 层                       │
-│       Scheduler · TaskQueue · WorkflowEngine            │
-├─────────────────────────────────────────────────────────┤
-│                     Commons 层                          │
-│          Utils · Schemas · Decorators                   │
-├─────────────────────────────────────────────────────────┤
-│                      Core 层                            │
-│  Abstractions · Services · Security · Observability     │
-└─────────────────────────────────────────────────────────┘
+L1 Raw Layer       ← Built-in (open-source, AGPL v3 + Apache 2.0)
+L2 Feature Layer   ← Built-in (open-source, AGPL v3 + Apache 2.0)
+L3 Structure Layer ← MemoryRovol (commercial, SPHARX EULA)
+L4 Pattern Layer   ← MemoryRovol (commercial, SPHARX EULA)
 ```
 
-#### 4.2.3 六阶段处理流水线
+## Branch Strategy
 
-| 阶段 | 模块                | 核心功能                               |
-| -- | ----------------- | ---------------------------------- |
-| 1  | **00\_ingest**    | ROS Bag 解析、图像压缩、隐私脱敏               |
-| 2  | **01\_quality**   | 模糊检测、曝光分析、帧丢弃检测                    |
-| 3  | **02\_enhance**   | YOLO 目标检测、HDVS 分割                  |
-| 4  | **03\_calibrate** | 棋盘格相机校准、重投影误差评估                    |
-| 5  | **04\_pack**      | 多格式数据集打包 (ROS/COCO/YOLO/VOC/KITTI) |
-| 6  | **05\_delivery**  | OSS 上传、交付通知、完整性校验                  |
+- This management repo: **`main`** only
+- Leaf repos: **`feature/official-hubs-01`** (active development)
 
-#### 4.2.4 设计原则
+## License
 
-基于 AgentOS K-1 至 K-4 架构原则：
+- **desktop** & **docker**: AGPL v3 + Apache 2.0 (SPDX: `AGPL-3.0-or-later OR Apache-2.0`)
+- **memoryrovol**: SPHARX Commercial EULA v1.0 (SPDX: `LicenseRef-SPHARX-MemoryRovol-EULA-1.0`)
 
-- **K-1 极简内核**：核心基础设施层最小化，仅包含必要抽象
-- **K-2 接口契约**：BasePipeline ABC 强制标准化生命周期
-- **K-3 服务隔离**：每个 Pipeline 模块独立容器化部署
-- **K-4 插拔策略**：运行时算法切换与配置热加载
+See individual [LICENSE](LICENSE) files in each leaf repo for details.
 
-#### 4.2.5 当前应用状况
-
-Workshop V3.0 版本已达到生产就绪状态，在实际项目中稳定运行：
-
-- ✅ 完成硬件同步方案（3×D455 相机）
-- ✅ 实现 RealSense 数据解析功能
-- ✅ 集成 YOLOv8 目标检测
-- ✅ 建立完整的质量控制体系
-- ✅ 支持多种数据交付方式
-- ✅ 六阶段流水线全部模块生产就绪
-
-***
-
-### 4.3 Deepness 深度加工生产线
-
-**定位**：始于数据，终于智能
-
-Deepness 是 SpharxWorks 平台的核心深度加工子系统，致力于将原始物理世界数据转化为富含语义和物理属性的高价值数据资产。系统采用模块化、容器化的设计理念，通过四个核心处理管道实现从基础数据到高级应用的完整转换链路。
-
-#### 4.3.1 核心价值
-
-- **物理世界数字化**：将现实场景转化为可计算、可仿真的数字孪生体
-- **语义丰富化**：为3D场景注入丰富的语义和物理属性信息
-- **交互建模**：记录和分析物理交互行为，支持反事实推演
-- **标准输出**：生成符合主流评测框架的标准化数据格式
-
-#### 4.3.2 系统架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Deepness 系统架构                         │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌─────────────┐    ┌──────────────┐    ┌─────────────────┐ │
-│  │   输入层     │───→│  处理层      │───→│    输出层         │ │
-│  │             │    │              │    │                 │ │
-│  │ • 原始数据   │    │ • 空间先验    │    │ • Benchmark      │ │
-│  │ • RGB-D     │    │ • 物理预测    │    │   格式           │ │
-│  │ • 时间戳     │    │ • 因果轨迹    │    │ • 应用接口        │ │
-│  │             │    │ • 评测导出    │    │                 │ │
-│  └─────────────┘    └──────────────┘    └─────────────────┘ │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### 4.3.3 四大核心处理管道
-
-**1. run\_01\_spatial\_prior** (空间先验生成)
-
-- 基于 NVIDIA Cosmos 世界模型实现空间理解
-- 生成场景的语义分割和几何先验
-- 为下游任务提供基础空间表征
-
-**2. run\_02\_physics\_jepa** (物理属性预测)
-
-- 基于 Meta JEPA 架构预测物体物理属性
-- 推断材质、密度、摩擦系数等参数
-- 构建物理一致的 3D 场景模型
-
-**3. run\_03\_causal\_trajectory** (因果轨迹记录)
-
-- 整合 YOLOv8 动态检测和 ORB-SLAM3/LIO-SAM 定位
-- 记录物理交互轨迹和因果链
-- 支持反事实推演和轨迹分析
-
-**4. run\_04\_benchmark\_export** (评测数据导出)
-
-- 转换为标准评测格式（Genie Sim 3.0、JEPA、Spatial）
-- 支持多种世界模型评估框架
-- 提供数据质量报告和统计信息
-
-#### 4.3.4 技术架构
-
-**基础设施**:
-
-- **Docker 容器化**：基于 CUDA 12.1 的 Ubuntu 22.04 基础镜像
-- **Python 环境**：Miniforge3 + Python 3.11，预装科学计算包
-- **深度学习**：PyTorch 2.5.1 (CUDA 12.1)、PyTorch3D 0.7.6
-- **3D 处理**：Open3D 0.18.0、Kaolin 0.17.0、gsplat 渲染引擎
-- **世界模型**：NVIDIA Cosmos、Meta JEPA
-- **视觉算法**：YOLOv8、ORB-SLAM3、LIO-SAM
-
-**架构设计**:
-
-- **四层架构**：应用层 → 编排层 → 处理层 → 核心层
-- **微内核设计**：核心仅提供基础抽象，服务可插拔
-- **依赖注入**：通过接口契约实现松耦合
-- **Pydantic V2**：类型安全的数据模型
-
-#### 4.3.5 开发进度
-
-当前版本 v2.0.0 开发进度 90%:
-
-- ✅ 基础架构搭建完成
-- ✅ Docker 容器化配置就绪
-- ✅ 四个核心处理模块全部实现
-  - ✅ run\_01\_spatial\_prior (Cosmos 适配器)
-  - ✅ run\_02\_physics\_jepa (JEPA 物理预测)
-  - ✅ run\_03\_causal\_trajectory (SLAM+ 因果推理)
-  - ✅ run\_04\_benchmark\_export (多格式导出)
-- ✅ 核心架构重构完成
-  - ✅ 四层架构（应用/编排/处理/核心）
-  - ✅ 安全与可观测性层
-  - ✅ 统一包结构
-- ⏳ 端到端集成测试中 (90%)
-- 🔲 性能基准测试
-
-***
-
-### 4.4 Benchmark — 评测工具
-
-**定位**：数据质量与系统性能评估
-
-Benchmark 是 SpharxWorks 的评测工具，用于数据质量和系统性能评估。它提供了完整的测试框架和评估指标，确保数据处理流程的质量和性能。
-
-#### 4.4.1 核心功能
-
-- **数据质量评估**：评估数据集的完整性、准确性、一致性
-- **系统性能测试**：测试系统吞吐量、延迟、资源利用率
-- **基准对比**：与行业标准进行对比分析
-- **报告生成**：自动生成详细的评估报告
-
-#### 4.4.2 评估维度
-
-| 维度       | 指标           | 说明      |
-| -------- | ------------ | ------- |
-| **数据质量** | 完整性、准确性、一致性  | 评估数据集质量 |
-| **系统性能** | 吞吐量、延迟、资源利用率 | 测试系统性能  |
-| **基准对比** | 与行业标准对比      | 对比分析    |
-
-## 5 技术创新
-
-### 5.1 物理世界理解
-
-- **多模态融合**：整合 RGB-D 相机、IMU 等多种传感器数据
-- **空间先验**：基于 NVIDIA Cosmos 世界模型的空间理解
-- **物理属性预测**：基于 Meta JEPA 架构的物体物理属性推断
-- **因果推理**：记录物理交互轨迹和行为模式
-
-### 5.2 智能体操作系统
-
-- **微内核设计**：内核极简，接口契约化，服务隔离
-- **认知架构**：双系统协同，增量演化，记忆卷载，遗忘机制
-- **安全设计**：虚拟工位，权限裁决，输入净化，审计追踪
-- **跨平台兼容**：支持 Linux、macOS、Windows (WSL2)
-
-### 5.3 工程实践
-
-- **容器化部署**：基于 Docker 的微服务架构，支持弹性扩展
-- **配置驱动**：模块化配置管理体系，支持热更新
-- **监控可观**：完善的日志系统和实时状态监控
-- **持续集成**：自动化测试和部署流水线
-
-## 6 发展路线图
-
-### 6.1 短期目标 (2026 Q2-Q3)
-
-- ✅ **Workshop v3.0.0** 生产就绪 - 六阶段流水线全部模块完成
-- ⏳ **Deepness v2.0.0** 端到端集成 (90%) - 四大处理管道联调中
-- ✅ **AgentOS v1.0.0.9** 核心功能完善
-
-### 6.2 中期规划 (2026 Q4-2027)
-
-- 🚀 **Deepness v2.1.0** 正式发布 - 完成性能基准测试和生产部署
-- 🔄 **Workshop → Deepness → AgentOS 完整数据流** - 实现三个系统的无缝集成
-- 🌐 **开发者生态** - 完善 SDK 和示例
-
-### 6.3 长期愿景 (2027+)
-
-- 🌐 **物理 AI 基础设施** - 成为人工智能时代的物理世界数据处理标准
-- 🤝 **全球化开源社区** - 建立开放包容的技术生态
-- 🏆 **下一代技术引领** - 物理世界理解与智能决策技术的持续创新
-
-## 7 商业价值
-
-### 7.1 行业应用
-
-| 行业       | 应用场景           | 价值              |
-| -------- | -------------- | --------------- |
-| **具身智能** | 环境感知、任务规划、自主导航 | 提升机器人智能水平和可靠性   |
-| **自动驾驶** | 环境理解、行为预测、决策规划 | 提高自动驾驶安全性和准确性   |
-| **空间智能** | 空间映射、环境理解、虚实融合 | 增强用户体验和交互能力     |
-| **工业制造** | 质量检测、流程优化、预测维护 | 提高生产效率和产品质量     |
-| **智慧城市** | 环境监测、交通管理、安全监控 | 提升城市管理水平和居民生活质量 |
-
-### 7.2 商业模式
-
-- **开源生态**：通过开源社区建设，扩大技术影响力
-- **商业授权**：为企业提供商业闭源授权和技术支持
-- **解决方案**：提供行业定制化解决方案
-- **硬件集成**：与硬件厂商合作，提供一体化解决方案
-
-## 8 生态合作
-
-我们诚邀各界合作伙伴共同建设数据智能基础设施生态：
-
-### 8.1 技术合作伙伴
-
-- **硬件厂商**：传感器、相机、GPU/NPU计算设备提供商
-- **算法团队**：3D 重建、SLAM、物理仿真、大模型等领域专家
-- **应用企业**：机器人、自动驾驶、AR/VR、智能助理等落地场景
-
-### 8.2 投资机会
-
-SpharxWorks 作为数据智能基础设施，具有广阔的市场前景：
-
-- **技术领先**：掌握物理世界理解和智能体操作系统核心技术
-- **市场潜力**：人工智能时代的基础设施需求巨大
-- **生态优势**：开放的生态系统，支持多行业应用
-- **团队实力**：核心团队来自顶尖科技公司和研究机构
-
-## 9 联系方式
-
-### 9.1 商务合作
-
-- **商务洽谈**：<zhouzhixian@spharx.cn>
-- **技术合作**：<lidecheng@spharx.cn>
-- **投资咨询**：<wangliren@spharx.cn>
-
-### 9.2 官方网站
-
-- **主站**：<https://spharx.cn>
-- **开发者社区**：<https://atomgit.com/spharx>
-
-## 10 许可证
-
-| 模块              | 许可证                   |
-| --------------- | --------------------- |
-| **SpharxWorks** | Apache License 2.0    |
-| **AgentOS**     | Apache License 2.0    |
-| **SpharxTools** | GPL-3.0 开源协议 + 商业闭源授权 |
-
-## 11 致谢
-
-感谢所有为开源社区做出贡献的开发者们，正是你们的努力让这样的项目成为可能。
-
-***
-
-<div align="center">
-
-<h3>From data intelligence emerges</h3>
-<h3>始于数据，终于智能</h3>
-
-<p><em>构建 AI 时代的数据智能基础设施</em></p>
-
-© 2026 SPHARX Ltd. All Rights Reserved.
-
-</div>
+Copyright (c) 2025-2026 **SPHARX Ltd.** All Rights Reserved.
