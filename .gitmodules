@@ -8,5 +8,5 @@
         branch = feature/official-hubs-01
 [submodule "memoryrovol"]
         path = memoryrovol
-        url = git@atomgit.com:spharx/memoryrovol.git
+        url = git@atomgit.com:openairymax/memoryrovol.git
         branch = feature/official-hubs-01
