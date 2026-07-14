@@ -1,10 +1,10 @@
 [submodule "desktop"]
         path = desktop
-        url = git@atomgit.com:openairymax/desktop.git
+        url = ../desktop.git
         branch = feature/official-hubs-01
 [submodule "docker"]
         path = docker
-        url = git@atomgit.com:openairymax/docker.git
+        url = ../docker.git
         branch = feature/official-hubs-01
 [submodule "memoryrovol"]
         path = memoryrovol
