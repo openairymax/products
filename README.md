@@ -315,6 +315,23 @@ SPDX: `AGPL-3.0-or-later OR Apache-2.0`. You may choose either license at
 your option. The full text of both licenses is included in the
 [`LICENSE`](LICENSE) file at the root of this management repository.
 
+### Dual License Guide
+
+You may choose **either** license at your option — not both, not neither.
+
+**SPDX Expression**: `AGPL-3.0-or-later OR Apache-2.0`
+
+| If you are... | Choose | Why |
+|---------------|--------|-----|
+| Building a **SaaS** or network service that modifies Airymax products | **AGPL v3** | Network service clause requires source disclosure |
+| Developing **open-source** product derivatives (copyleft) | **AGPL v3** | Derivatives must remain open-source under AGPL |
+| Using Airymax products in **commercial closed-source** deployments | **Apache 2.0** | Permissive, allows proprietary derivatives |
+| Building **enterprise internal tools** | **Apache 2.0** | No source disclosure required |
+| Needing **patent protection** | **Apache 2.0** | Explicit patent grant from contributors |
+| Just learning or researching | **Either** | Both permit personal use |
+
+> **Note**: This dual-license guide applies to the **management repository** and the `desktop/` / `docker/` submodules. The `memoryrovol/` submodule is **NOT** covered by this guide — it is governed by the SPHARX Commercial EULA v1.0 and requires a separate License Key. See [§ Per-submodule licensing](#per-submodule-licensing) below.
+
 ### Per-submodule licensing
 
 Each leaf submodule carries **its own** license in its own `LICENSE` file;
@@ -333,6 +350,8 @@ EULA v1.0 and a valid License Key for the applicable Authorization Tier
 (Trial / Pro / Enterprise / Enterprise+). See
 [§ MemoryRovol Licensing](#memoryrovol-licensing) and the
 [`memoryrovol/LICENSE`](memoryrovol/LICENSE) file for the full terms.
+
+For the authoritative license policy, see [12-license-policy.md](../docs/AirymaxOS/50-engineering-standards/12-license-policy.md).
 
 ---
 
