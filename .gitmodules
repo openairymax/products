@@ -1,12 +1,12 @@
 [submodule "desktop"]
         path = desktop
         url = ../desktop.git
-        branch = feature/official-hubs-01
+        branch = develop/hubs-01
 [submodule "docker"]
         path = docker
         url = ../docker.git
-        branch = feature/official-hubs-01
+        branch = develop/hubs-01
 [submodule "memoryrovol"]
         path = memoryrovol
         url = git@atomgit.com:openairymax/memoryrovol.git
-        branch = feature/official-hubs-01
+        branch = develop/hubs-01
