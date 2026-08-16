@@ -8,5 +8,6 @@
         branch = develop/hubs-01
 [submodule "memoryrovol"]
         path = memoryrovol
-        url = git@atomgit.com:openairymax/memoryrovol.git
+        url = https://atomgit.com/openairymax/memoryrovol.git
         branch = develop/hubs-01
+        update = none
