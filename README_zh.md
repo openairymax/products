@@ -5,11 +5,11 @@
 > 与企业客户的统一交付面。
 >
 > [airymaxhub](https://atomgit.com/openairymax/airymaxhub) 伞仓下五个管理仓之一
-> （Airymax 0.1.1 发行版：1 伞仓 + 5 管理仓 + 29 叶子仓 + 3 顶层仓 = 38 仓）。
+> （Airymax 发布拓扑：1 伞仓 + 5 管理仓 + 29 叶子仓 + 3 顶层仓 = 38 仓）。
 
 **语言:** [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-0.1.1-5a6b7e)](https://atomgit.com/openairymax/products)
+[![Version](https://img.shields.io/badge/version-0.1.9-5a6b7e)](https://atomgit.com/openairymax/products)
 [![License](https://img.shields.io/badge/license-AGPL--3.0+Apache--2.0-4a90d9)](LICENSE)
 
 ---
@@ -147,7 +147,7 @@ L4 模式层       ← MemoryRovol（商业，SPHARX EULA）
 
 ## MemoryRovol 许可证
 
-`memoryrovol` 是整个 Airymax 0.1.1 发行版中唯一的闭源组件。它受 **SPHARX 商业
+`memoryrovol` 是整个 Airymax 平台中唯一的闭源组件。它受 **SPHARX 商业
 EULA v1.0**（SPDX：`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`）约束，由
 **SPHARX Ltd.** 出品并所有，托管在 **`spharx`** 组织下
 （`git@atomgit.com:spharx/memoryrovol.git`），而非 `openairymax`。
@@ -241,7 +241,7 @@ docker compose -f docker-compose.prod.yml \
     --env-file .env.production.example up -d --build
 
 # 直接构建单个镜像（如 kernel 镜像）
-docker build -f Dockerfile.kernel -t airymax-kernel:0.1.1 ..
+docker build -f Dockerfile.kernel -t airymax-kernel:0.1.9 ..
 ```
 
 所有镜像均以非 root 的 `agentos:1000` 用户运行，启用 `read_only` 文件系统、
@@ -266,7 +266,7 @@ cmake --build build -j
 ## 分支策略
 
 - **本管理仓**：仅 `main` 分支。所有发行 tag 均在 `main` 上切出。
-- **叶子仓**（`desktop`、`docker`、`memoryrovol`）：`feature/official-hubs-01`
+- **叶子仓**（`desktop`、`docker`、`memoryrovol`）：`develop/hubs-01`
   为活跃开发分支，由 `.gitmodules` 中的 `branch =` 配置跟踪。各叶子仓的 `main`
   分支在发行时接收合并后的稳定化提交。
 
