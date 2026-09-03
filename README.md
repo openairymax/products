@@ -8,12 +8,12 @@
 >
 > One of five management repositories under the
 > [airymaxhub](https://atomgit.com/openairymax/airymaxhub) umbrella (Airymax
-> 0.1.1 release: 1 umbrella + 5 management + 29 leaf + 3 top-level = 38
+> release topology: 1 umbrella + 5 management + 29 leaf + 3 top-level = 38
 > repositories).
 
 **Language:** English | [简体中文](README_zh.md)
 
-[![Version](https://img.shields.io/badge/version-0.1.1-5a6b7e)](https://atomgit.com/openairymax/products)
+[![Version](https://img.shields.io/badge/version-0.1.9-5a6b7e)](https://atomgit.com/openairymax/products)
 [![License](https://img.shields.io/badge/license-AGPL--3.0+Apache--2.0-4a90d9)](LICENSE)
 
 ---
@@ -167,8 +167,8 @@ L4 Pattern Layer   ← MemoryRovol (commercial, SPHARX EULA)
 
 ## MemoryRovol Licensing
 
-`memoryrovol` is the only closed-source component in the entire Airymax 0.1.1
-release. It is governed by the **SPHARX Commercial EULA v1.0**
+`memoryrovol` is the only closed-source component in the Airymax platform.
+It is governed by the **SPHARX Commercial EULA v1.0**
 (SPDX: `LicenseRef-SPHARX-MemoryRovol-EULA-1.0`), authored and owned by
 **SPHARX Ltd.**, and hosted under the **`spharx`** organization
 (`git@atomgit.com:spharx/memoryrovol.git`) rather than `openairymax`.
@@ -266,7 +266,7 @@ docker compose -f docker-compose.prod.yml \
     --env-file .env.production.example up -d --build
 
 # Build a single image directly (e.g. the kernel image)
-docker build -f Dockerfile.kernel -t airymax-kernel:0.1.1 ..
+docker build -f Dockerfile.kernel -t airymax-kernel:0.1.9 ..
 ```
 
 All images run as a non-root `agentos:1000` user with `read_only`
@@ -295,7 +295,7 @@ built-in provider — no source changes are required downstream.
 - **This management repository**: `main` only. All release tags are cut on
   `main`.
 - **Leaf repositories** (`desktop`, `docker`, `memoryrovol`):
-  `feature/official-hubs-01` is the active development branch tracked by
+  `develop/hubs-01` is the active development branch tracked by
   the submodules' `branch =` configuration in `.gitmodules`. The `main`
   branch of each leaf repo receives merged stabilization commits at
   release time.
