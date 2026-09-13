@@ -5,15 +5,9 @@
 > Docker deployment images, and the commercial MemoryRovol memory provider —
 > into a single deliverable surface for end users, operators and enterprise
 > customers.
->
-> One of five management repositories under the
-> [airymaxhub](https://atomgit.com/openairymax/airymaxhub) umbrella (Airymax
-> release topology: 1 umbrella + 5 management + 29 leaf + 3 top-level = 38
-> repositories).
 
 **Language:** English | [简体中文](README_zh.md)
 
-[![Version](https://img.shields.io/badge/version-0.1.9-5a6b7e)](https://atomgit.com/openairymax/products)
 [![License](https://img.shields.io/badge/license-AGPL--3.0+Apache--2.0-4a90d9)](LICENSE)
 
 ---
@@ -36,11 +30,13 @@ Two of the three leaf repositories (`desktop` and `docker`) ship under the
 **AGPL v3 + Apache 2.0** dual license that governs the rest of the Airymax
 platform. The third one, `memoryrovol`, is a **closed-source commercial
 product** governed by the **SPHARX Commercial EULA v1.0**
-(`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`), and lives under the **`spharx`**
-organization rather than `openairymax`. The management repository itself
-(this `products/` repo) is dual-licensed AGPL v3 + Apache 2.0, but cloning it
-recursively will pull `memoryrovol` whose use requires a valid License Key.
-See [§ MemoryRovol Licensing](#memoryrovol-licensing) and
+(`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`). All three repositories are
+hosted under the [openairymax](https://atomgit.com/openairymax) organization
+on AtomGit for distribution and issue tracking; the proprietary license of
+`memoryrovol` is unaffected by where it is hosted. The management repository
+itself (this `products/` repo) is dual-licensed AGPL v3 + Apache 2.0, but
+cloning it recursively will pull `memoryrovol` whose use requires a valid
+License Key. See [§ MemoryRovol Licensing](#memoryrovol-licensing) and
 [§ License](#license) for the exact terms.
 
 ## Repository Structure
@@ -51,7 +47,7 @@ products/                       # this management repository (AGPL v3 + Apache 2
 │                               #   Airymax Desktop GUI (Tauri v2 + React 18)
 ├── docker/                     # git submodule → openairymax/docker
 │                               #   Docker images & docker-compose stacks
-├── memoryrovol/                # git submodule → spharx/memoryrovol  (CLOSED-SOURCE)
+├── memoryrovol/                # git submodule → openairymax/memoryrovol  (CLOSED-SOURCE)
 │                               #   Commercial L3/L4 memory provider (SPHARX EULA)
 ├── .gitmodules                 # submodule wiring (3 entries)
 ├── .gitignore
@@ -65,9 +61,9 @@ products/                       # this management repository (AGPL v3 + Apache 2
 
 | Module | Repository URL | License | Description |
 |--------|----------------|---------|-------------|
-| **desktop** | `git@atomgit.com:openairymax/desktop.git` | AGPL v3 + Apache 2.0 | Cross-platform desktop application (Airymax Desktop GUI) — personal client built on Tauri v2 / React 18 / TypeScript / Vite. |
-| **docker** | `git@atomgit.com:openairymax/docker.git` | AGPL v3 + Apache 2.0 | Official Docker images and Docker Compose stacks for development, staging and production deployment of the AgentRT runtime. |
-| **memoryrovol** | `git@atomgit.com:spharx/memoryrovol.git` | SPHARX EULA v1.0 (proprietary) | Commercial closed-source memory provider implementing the L3 (Structure) and L4 (Pattern) memory layers. Belongs to the `spharx` organization, not `openairymax`. |
+| **desktop** | `https://atomgit.com/openairymax/desktop.git` | AGPL v3 + Apache 2.0 | Cross-platform desktop application (Airymax Desktop GUI) — personal client built on Tauri v2 / React 18 / TypeScript / Vite. |
+| **docker** | `https://atomgit.com/openairymax/docker.git` | AGPL v3 + Apache 2.0 | Official Docker images and Docker Compose stacks for development, staging and production deployment of the AgentRT runtime. |
+| **memoryrovol** | `https://atomgit.com/openairymax/memoryrovol.git` | SPHARX EULA v1.0 (proprietary) | Commercial closed-source memory provider implementing the L3 (Structure) and L4 (Pattern) memory layers. |
 
 > **Licensing note.** `desktop` and `docker` use the same AGPL v3 + Apache 2.0
 > dual license as the rest of the Airymax platform
@@ -84,11 +80,11 @@ enterprise integrates. They are consumed downstream of the runtime / SDK /
 ecosystem layers and never produce code that flows back upstream.
 
 ```
-                  ┌──────────────────────────────────────┐
-                  │  Upstream source layers              │
-                  │  sdk/  ·  agentrt/  ·  ecosystem/    │
-                  │  atoms/memoryrovol/  (bridge API)    │
-                  └────────────────┬─────────────────────┘
+                  ┌────────────────────────────────────────┐
+                  │  Upstream source layers                │
+                  │  sdk/  ·  agentrt/  ·  ecosystem/      │
+                  │ atoms/memory/memoryrovol/ (bridge API) │
+                  └──────────────────┬─────────────────────┘
                                    │
    ┌───────────────────────────────┼───────────────────────────────┐
    │                               │                               │
@@ -103,7 +99,7 @@ ecosystem layers and never produce code that flows back upstream.
        │                          │                              │
        ▼                          ▼                              ▼
    End users              Operators / enterprise           AgentRT runtime
-   (personal)             deployments                     (via AGENTRT_WITH_
+   (personal)             deployments                     (via AIRY_WITH_
                                                           MEMORYROVOL=ON)
 ```
 
@@ -116,7 +112,7 @@ Linux, supports offline-first PWA behaviour, system tray integration,
 global shortcuts and a built-in connection to a locally running AgentRT
 gateway.
 
-- **Upstream**: `sdk/agentrt/` (runtime + SDK gateway HTTP / WebSocket API),
+- **Upstream**: `agentrt/` (runtime + SDK gateway HTTP / WebSocket API),
   `products/docker/` (optional companion gateway backend).
 - **Downstream**: end users (personal users) who install the produced
   `.exe` / `.dmg` / `.deb` / `.AppImage` artifacts.
@@ -125,17 +121,20 @@ gateway.
 
 The Docker module provides reproducible, security-hardened OCI images for
 the AgentRT runtime, daemon services, gateway, OpenLab and the desktop web
-frontend, plus three Docker Compose manifests (development / staging /
-production) wired with PostgreSQL, Redis and a Prometheus + Grafana +
-AlertManager observability stack.
+frontend, plus three Docker Compose manifests covering the development,
+staging and production environments.
 
 - **Images**: `Dockerfile.kernel`, `Dockerfile.daemon`,
   `Dockerfile.openlab`, `Dockerfile.desktop`.
 - **Stacks**: `docker-compose.yml` (dev), `docker-compose.staging.yml`,
   `docker-compose.prod.yml`.
-- **Upstream**: `agentrt/` runtime source tree, `ecosystem/manager/`
-  configuration defaults, `products/desktop/` source consumed by
-  `Dockerfile.desktop`.
+  - **dev** — kernel, daemon services and gateway only, for local
+    development.
+  - **staging / prod** — additionally include PostgreSQL, Redis, and a
+    Prometheus + Grafana observability stack, plus the OpenLab and desktop
+    web services.
+- **Upstream**: `agentrt/` runtime source tree, `products/desktop/` source
+  consumed by `Dockerfile.desktop`.
 - **Downstream**: DevOps / SRE / enterprise operators running the produced
   images in dev, staging or production.
 
@@ -150,9 +149,10 @@ MemoryRovol is linked, the bridge routes memory calls to it; if not, the
 bridge transparently falls back to the runtime's built-in open-source
 provider (which covers only L1 and L2).
 
-- **Upstream**: `atoms/memoryrovol/` bridge API (weak symbols).
-- **Downstream**: AgentRT runtime (via the `AGENTRT_WITH_MEMORYROVOL=ON`
-  CMake option).
+- **Upstream**: `atoms/memory/memoryrovol/` bridge API (weak symbols).
+- **Downstream**: AgentRT runtime (the `AIRY_WITH_MEMORYROVOL` CMake
+  option, enabled by default; backend selected via
+  `AIRY_MEMORY_BACKEND=builtin|memoryrovol`).
 - **License**: SPHARX Commercial EULA v1.0 — see
   [§ MemoryRovol Licensing](#memoryrovol-licensing).
 
@@ -170,8 +170,10 @@ L4 Pattern Layer   ← MemoryRovol (commercial, SPHARX EULA)
 `memoryrovol` is the only closed-source component in the Airymax platform.
 It is governed by the **SPHARX Commercial EULA v1.0**
 (SPDX: `LicenseRef-SPHARX-MemoryRovol-EULA-1.0`), authored and owned by
-**SPHARX Ltd.**, and hosted under the **`spharx`** organization
-(`git@atomgit.com:spharx/memoryrovol.git`) rather than `openairymax`.
+**SPHARX Ltd.** The repository is hosted under the
+[openairymax](https://atomgit.com/openairymax) organization on AtomGit for
+distribution and issue tracking; hosting location does not change its
+proprietary licensing.
 
 ### Authorization Tiers
 
@@ -208,7 +210,7 @@ the surrounding management repository **does not apply** to that submodule.
 
 ```bash
 # Clone the management repo and all three leaf submodules
-git clone --recurse-submodules git@atomgit.com:openairymax/products.git
+git clone --recurse-submodules https://atomgit.com/openairymax/products.git
 
 # If already cloned without --recurse-submodules:
 cd products
@@ -241,7 +243,7 @@ npm run tauri build
 ```
 
 The produced artifacts land in `desktop/src-tauri/target/release/bundle/`.
-The default gateway endpoint is `http://localhost:18789` and can be
+The default gateway endpoint is `http://localhost:8080` and can be
 overridden via `VITE_AGENTOS_GATEWAY_HOST` / `VITE_AGENTOS_GATEWAY_PORT`
 (see `desktop/.env.example`).
 
@@ -253,11 +255,11 @@ stacks. See `docker/README.md` and `docker/DEPLOYMENT.md` for full details.
 ```bash
 cd docker
 
-# Development stack (kernel + daemon + gateway + OpenLab + desktop web,
-# plus PostgreSQL + Redis + monitoring)
+# Development stack (kernel + daemon services + gateway)
 docker compose --env-file .env.example up -d --build
 
-# Staging stack
+# Staging stack (adds PostgreSQL, Redis, Prometheus + Grafana,
+# OpenLab and the desktop web frontend)
 docker compose -f docker-compose.staging.yml \
     --env-file .env.staging.example up -d --build
 
@@ -265,40 +267,48 @@ docker compose -f docker-compose.staging.yml \
 docker compose -f docker-compose.prod.yml \
     --env-file .env.production.example up -d --build
 
-# Build a single image directly (e.g. the kernel image)
-docker build -f Dockerfile.kernel -t airymax-kernel:0.1.9 ..
+# Build a single image directly (e.g. the kernel image).
+# The build context is the platform workspace root (the directory that
+# contains products/, agentrt/ and cmake/), matching the `context: ../..`
+# used by the Compose files.
+docker build -f Dockerfile.kernel -t airymax-kernel:local ../..
 ```
 
-All images run as a non-root `agentos:1000` user with `read_only`
-filesystems, `seccomp` profile, `cap_drop: ALL` and no privilege
-escalation, aligned with the CIS Docker Benchmark baseline.
+The kernel and daemon images run as a dedicated non-root `agentrt` user
+(UID 1000) and the OpenLab image as a dedicated non-root `openlab` user.
+The staging and production Compose stacks additionally enforce `read_only`
+root filesystems, dropped Linux capabilities (`cap_drop`) and seccomp
+profiles, aligned with the CIS Docker Benchmark baseline. The development
+stack relaxes these settings for local convenience.
 
 ### Link MemoryRovol into the AgentRT runtime (commercial)
 
-MemoryRovol is consumed at AgentRT build time through a CMake option. This
-requires a valid License Key and the `memoryrovol` submodule checked out.
+MemoryRovol is consumed at AgentRT build time through the
+`AIRY_WITH_MEMORYROVOL` CMake option (enabled by default) together with the
+`AIRY_MEMORY_BACKEND` backend selector. This requires the `memoryrovol`
+sources available and, for actual use, a valid License Key provisioned at
+runtime via a license file (see `memoryrovol/README.md` for the licensing
+and integration details).
 
 ```bash
-# Inside the agentrt/ build directory
-cmake -S ../agentrt -B build \
-    -DAGENTRT_WITH_MEMORYROVOL=ON \
-    -DMEMORYROVOL_LICENSE_KEY=<your-license-key>
-cmake --build build -j
+# Configure the AgentRT runtime with MemoryRovol support
+cmake -S agentrt -B build-agentrt \
+    -DAIRY_WITH_MEMORYROVOL=ON \
+    -DAIRY_MEMORY_BACKEND=memoryrovol
+cmake --build build-agentrt -j
 ```
 
-When `AGENTRT_WITH_MEMORYROVOL=ON` is **off** (or no License Key is
-provided), the runtime falls back transparently to the open-source L1/L2
-built-in provider — no source changes are required downstream.
+Switching `AIRY_MEMORY_BACKEND` back to `builtin` (the default) makes the
+runtime transparently fall back to the open-source L1/L2 built-in provider
+— no source changes are required downstream.
 
 ## Branch Strategy
 
 - **This management repository**: `main` only. All release tags are cut on
   `main`.
-- **Leaf repositories** (`desktop`, `docker`, `memoryrovol`):
-  `develop/hubs-01` is the active development branch tracked by
-  the submodules' `branch =` configuration in `.gitmodules`. The `main`
-  branch of each leaf repo receives merged stabilization commits at
-  release time.
+- **Leaf repositories** (`desktop`, `docker`, `memoryrovol`): `main` is the
+  distribution branch. Submodules are pinned to exact commits so that every
+  checkout of this repository is reproducible.
 
 ## License
 
@@ -350,8 +360,6 @@ EULA v1.0 and a valid License Key for the applicable Authorization Tier
 (Trial / Pro / Enterprise / Enterprise+). See
 [§ MemoryRovol Licensing](#memoryrovol-licensing) and the
 [`memoryrovol/LICENSE`](memoryrovol/LICENSE) file for the full terms.
-
-For the authoritative license policy, see [12-license-policy.md](../docs/AirymaxOS/50-engineering-standards/12-license-policy.md).
 
 ---
 
