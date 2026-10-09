@@ -117,6 +117,21 @@ if(NOT AIRY_COREKERN_INCLUDE_DIR)
     set(AIRY_COREKERN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/atoms/corekern/include")
 endif()
 
+# cJSON 检测：embedded 复用根检测 CACHE（coreloopthree 提升的 AIRY_CJSON_*）；
+# standalone 经 pkg-config 或已导入的 CJSON_* 变量探测。镜像 lang_gateway 范式。
+if(PkgConfig_FOUND AND NOT AIRY_CJSON_FOUND)
+    pkg_check_modules(CJSON QUIET libcjson)
+endif()
+set(_cog_cjson_inc "")
+set(_cog_cjson_libs "")
+if(AIRY_CJSON_FOUND AND AIRY_CJSON_LIBRARIES)
+    set(_cog_cjson_inc "${AIRY_CJSON_INCLUDE_DIRS}")
+    set(_cog_cjson_libs "${AIRY_CJSON_LIBRARIES}")
+elseif(CJSON_FOUND OR CJSON_LIBRARIES)
+    set(_cog_cjson_inc "${CJSON_INCLUDE_DIRS}")
+    set(_cog_cjson_libs "${CJSON_LIBRARIES}")
+endif()
+
 set(COGNITION_SOURCES
     src/weighted.c
     src/priority.c
@@ -129,11 +144,13 @@ set(COGNITION_SOURCES
     src/coord_weighted.c
     src/coord_arbiter.c
     src/coord_adapter.c
+    src/cog_review.c
 )
 set(COGNITION_HEADERS
     include/dispatch_strategy.h
     include/plan_strategy.h
     include/coord_strategy.h
+    include/cog_review_strategy.h
 )
 
 # 机制 ops 小库（airy_llm_ops）：协调策略载荷经注入表调用 LLM。embedded 形态
@@ -173,8 +190,22 @@ target_include_directories(airy_cognition_strategy PUBLIC
 
 target_link_libraries(airy_cognition_strategy PUBLIC airy_common)
 
+# embedded：链接 airy_core 以继承其 PUBLIC 的 AIRY_USE_SCHEDULER_THREAD_IMPL
+# 定义，使 CPR 并行 worker 走 corekern 调度线程 SSoT（G1 守恒）；standalone
+# 无 airy_core，cog_review 的线程调用回退平台别名（可接受）。
+if(TARGET airy_core)
+    target_link_libraries(airy_cognition_strategy PUBLIC airy_core)
+endif()
+
 if(TARGET airy_llm_ops)
     target_link_libraries(airy_cognition_strategy PUBLIC airy_llm_ops)
+endif()
+
+# cJSON：cog_review 汇总决策 JSON（embedded/standalone 一致）
+if(_cog_cjson_libs)
+    target_compile_definitions(airy_cognition_strategy PRIVATE AIRY_HAS_CJSON=1)
+    target_include_directories(airy_cognition_strategy PRIVATE ${_cog_cjson_inc})
+    target_link_libraries(airy_cognition_strategy PRIVATE ${_cog_cjson_libs})
 endif()
 
 if(MSVC)
@@ -247,6 +278,27 @@ if(BUILD_TESTS)
         target_link_libraries(test_coord_strategy PRIVATE pthread dl m)
     endif()
     add_test(NAME cognition_coord_tests COMMAND test_coord_strategy)
+
+    add_executable(test_cog_review_strategy tests/unit/test_cog_review_strategy.c)
+    target_compile_definitions(test_cog_review_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
+    if(_cog_cjson_libs)
+        target_compile_definitions(test_cog_review_strategy PRIVATE AIRY_HAS_CJSON=1)
+    endif()
+    target_include_directories(test_cog_review_strategy PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+        ${_cog_cjson_inc}
+    )
+    target_link_libraries(test_cog_review_strategy PRIVATE airy_cognition_strategy)
+    if(_cog_cjson_libs)
+        target_link_libraries(test_cog_review_strategy PRIVATE ${_cog_cjson_libs})
+    endif()
+    if(NOT MSVC)
+        target_link_libraries(test_cog_review_strategy PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_cog_review_tests COMMAND test_cog_review_strategy)
 endif()
 
 install(TARGETS airy_cognition_strategy
@@ -256,5 +308,6 @@ install(TARGETS airy_cognition_strategy
 )
 
 install(FILES include/dispatch_strategy.h include/plan_strategy.h include/coord_strategy.h
+    include/cog_review_strategy.h
     DESTINATION include/agentrt/cognition
 )
