@@ -1,0 +1,99 @@
+# =============================================================================
+# Airymax C Layer Module — .gitignore
+# 策略：非必要不追踪。仅忽略本地构建产物与运行时数据，
+#       源码、CMake 配置与必要文件保持可追踪，避免误推远程仓库
+# =============================================================================
+
+# ---------- CMake / 构建产物 ----------
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# ---------- 编译产物 ----------
+*.o
+*.obj
+*.a
+*.lib
+*.la
+*.so
+*.so.*
+*.dll
+*.dylib
+*.exe
+*.out
+*.app
+
+# ---------- 依赖目录与归档包（防止大文件/第三方源码入库） ----------
+_deps/
+vendor/
+*.tar.gz
+*.tar.bz2
+*.zip
+*.rar
+*.7z
+
+# ---------- 测试与覆盖率 ----------
+*.gcov
+*.gcda
+*.gcno
+*.profraw
+test-results/
+test_output/
+
+# ---------- Core dump ----------
+/core
+core.*
+*.core
+
+# ---------- Python 测试脚本缓存 ----------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ---------- IDE 与编辑器配置 ----------
+.vscode/
+.idea/
+.vs/
+.trae/
+*.code-workspace
+.cache/
+.clangd/
+
+# ---------- 环境与密钥（禁止入库） ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# ---------- 运行时数据（daemon socket / 日志 / 数据库 / PID） ----------
+data/
+*.log
+*.sock
+*.pid
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.tmp
+*.bak
+
+# ---------- 操作系统文件 ----------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---------- 编辑器临时文件 ----------
+*.swp
+*.swo
+*~
