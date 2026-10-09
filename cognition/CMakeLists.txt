@@ -122,9 +122,12 @@ set(COGNITION_SOURCES
     src/priority.c
     src/round_robin.c
     src/ml_based.c
+    src/hierarchical.c
+    src/ml_planner.c
 )
 set(COGNITION_HEADERS
     include/dispatch_strategy.h
+    include/plan_strategy.h
 )
 
 add_library(airy_cognition_strategy STATIC ${COGNITION_SOURCES} ${COGNITION_HEADERS})
@@ -145,6 +148,7 @@ target_include_directories(airy_cognition_strategy PUBLIC
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/memory>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/logging>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/string>
+    $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/cognition>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/types>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/sync>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/include>
@@ -196,6 +200,20 @@ if(BUILD_TESTS)
         target_link_libraries(test_dispatch_strategy PRIVATE pthread dl m)
     endif()
     add_test(NAME cognition_strategy_tests COMMAND test_dispatch_strategy)
+
+    add_executable(test_plan_strategy tests/unit/test_plan_strategy.c)
+    target_compile_definitions(test_plan_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
+    target_include_directories(test_plan_strategy PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+    )
+    target_link_libraries(test_plan_strategy PRIVATE airy_cognition_strategy)
+    if(NOT MSVC)
+        target_link_libraries(test_plan_strategy PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_plan_tests COMMAND test_plan_strategy)
 endif()
 
 install(TARGETS airy_cognition_strategy
@@ -204,6 +222,6 @@ install(TARGETS airy_cognition_strategy
     ARCHIVE DESTINATION lib/static
 )
 
-install(FILES include/dispatch_strategy.h
+install(FILES include/dispatch_strategy.h include/plan_strategy.h
     DESTINATION include/agentrt/cognition
 )
