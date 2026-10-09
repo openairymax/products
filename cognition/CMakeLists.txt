@@ -1,5 +1,5 @@
 # =============================================================================
-# cognition — 认知分发策略产品库（products 产品仓，M5-4 迁出）
+# cognition — 认知策略产品库（分发 / 规划 / 协调，products 产品仓，M5-4 迁出）
 #
 # 双模式构建契约（0.1.19 §1.3 机制核外迁；台账 §261）：
 #   embedded   —— agentrt 根 add_subdirectory 纳入本目录时
@@ -124,13 +124,28 @@ set(COGNITION_SOURCES
     src/ml_based.c
     src/hierarchical.c
     src/ml_planner.c
+    src/coord_dual.c
+    src/coord_majority.c
+    src/coord_weighted.c
+    src/coord_arbiter.c
+    src/coord_adapter.c
 )
 set(COGNITION_HEADERS
     include/dispatch_strategy.h
     include/plan_strategy.h
+    include/coord_strategy.h
 )
 
-add_library(airy_cognition_strategy STATIC ${COGNITION_SOURCES} ${COGNITION_HEADERS})
+# 机制 ops 小库（airy_llm_ops）：协调策略载荷经注入表调用 LLM。embedded 形态
+# 由 atoms 提供 airy_llm_ops 目标；standalone 形态（未纳入 atoms）直编其唯一
+# 实现单元 src/ops/llm_ops.c（零依赖），使本库自包含。镜像 lang_gateway 范式。
+set(COG_LLM_OPS_SRC "")
+if(NOT TARGET airy_llm_ops)
+    set(COG_LLM_OPS_SRC "${COG_CONTRACT_DIR}/../src/ops/llm_ops.c")
+endif()
+
+add_library(airy_cognition_strategy STATIC
+    ${COGNITION_SOURCES} ${COGNITION_HEADERS} ${COG_LLM_OPS_SRC})
 
 target_include_directories(airy_cognition_strategy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -157,6 +172,10 @@ target_include_directories(airy_cognition_strategy PUBLIC
 )
 
 target_link_libraries(airy_cognition_strategy PUBLIC airy_common)
+
+if(TARGET airy_llm_ops)
+    target_link_libraries(airy_cognition_strategy PUBLIC airy_llm_ops)
+endif()
 
 if(MSVC)
     target_compile_options(airy_cognition_strategy PRIVATE /W4)
@@ -214,6 +233,20 @@ if(BUILD_TESTS)
         target_link_libraries(test_plan_strategy PRIVATE pthread dl m)
     endif()
     add_test(NAME cognition_plan_tests COMMAND test_plan_strategy)
+
+    add_executable(test_coord_strategy tests/unit/test_coord_strategy.c)
+    target_compile_definitions(test_coord_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
+    target_include_directories(test_coord_strategy PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+    )
+    target_link_libraries(test_coord_strategy PRIVATE airy_cognition_strategy)
+    if(NOT MSVC)
+        target_link_libraries(test_coord_strategy PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_coord_tests COMMAND test_coord_strategy)
 endif()
 
 install(TARGETS airy_cognition_strategy
@@ -222,6 +255,6 @@ install(TARGETS airy_cognition_strategy
     ARCHIVE DESTINATION lib/static
 )
 
-install(FILES include/dispatch_strategy.h include/plan_strategy.h
+install(FILES include/dispatch_strategy.h include/plan_strategy.h include/coord_strategy.h
     DESTINATION include/agentrt/cognition
 )
