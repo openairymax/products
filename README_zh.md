@@ -1,8 +1,8 @@
-# Airymax 产品层 — 桌面应用、Docker 与商业记忆模块
+# Airymax 产品层 — 策略模块聚合
 
-> Airymax AI 智能体运行时平台的**产品打包管理仓**。聚合三个叶子仓 —— 桌面应用、
-> Docker 部署镜像、商业 MemoryRovol 记忆提供者 —— 形成面向最终用户、运维人员
-> 与企业客户的统一交付面。
+> Airymax AI 智能体运行时平台的**策略模块聚合仓**。将平台中承载「策略」的模块
+> —— 商业 MemoryRovol 记忆提供者、`cupolas` 安全穹顶、推理语言网关 —— 汇集于
+> 统一的管理面之下，使策略载荷与机制核保持物理分离。
 
 **语言:** [English](README.md) | 简体中文
 
@@ -12,116 +12,90 @@
 
 ## 概述
 
-**Products 管理仓**（`products/`）是 Airymax 平台的产品打包层。本仓本身不含一
-方源码，而是以 git submodule 形式聚合三个独立的叶子仓，对外呈现为平台的可安装 /
-可部署交付面：
+**Products 管理仓**（`products/`）是 Airymax 平台的**策略模块聚合路径**。它聚合
+承载*策略*的模块 —— 由 AgentRT 机制核加载或分派的可替换、策略形态的载荷 —— 并
+使其与机制核保持物理分离：
 
-- **desktop** —— 跨平台个人客户端（Tauri v2 + React 18）。
-- **docker** —— 官方容器化部署镜像与 Compose 编排栈。
 - **memoryrovol** —— 商业 L3/L4 记忆提供者（闭源）。
+- **cupolas** —— 安全穹顶：沙箱隔离、RBAC/ABAC 权限裁决、输入净化、审计追踪，
+  以及动态策略引擎（策略决策点 PDP）。
+- **lang_gateway** —— 推理语言网关：推理语言全生命周期管理（信号提取、多因子
+  模型路由、System Prompt 语言约束、输出后处理）。
 
-### 混合许可证提示
+本仓遵循平台的**机制 / 策略分离**原则：机制核位于
+[`agentrt/`](../agentrt)（atoms · commons · daemons · gateway · heapstore ·
+protocols · tools），而策略形态的模块位于本仓，并通过稳定契约（`ops` 分发表、
+弱符号桥、submodule 固定）接入。策略模块可被替换、升级或移除而不触碰内核；内核
+保留内置回退，在策略模块缺席时仍保持可用。
 
-三个叶子仓中有两个（`desktop` 与 `docker`）采用与 Airymax 平台其余部分一致的
-**AGPL v3 + Apache 2.0** 双许可证。第三个 `memoryrovol` 是**闭源商业产品**，受
-**SPHARX 商业 EULA v1.0**（`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`）约束。
-三个仓库均托管在 AtomGit 的
-[openairymax](https://atomgit.com/openairymax) 组织下，用于分发与问题跟踪；
-`memoryrovol` 的专有许可不因其托管位置而改变。管理仓本身（即本 `products/`
-仓库）采用 AGPL v3 + Apache 2.0 双许可证，但递归克隆本仓会拉取到 `memoryrovol`，
-而 `memoryrovol` 的实际使用需要有效的 License Key。完整条款见
-[§ MemoryRovol 许可证](#memoryrovol-许可证) 与 [§ 许可证](#许可证)。
+与 [`sdk/`](../sdk) —— 纯叶子聚合 —— 不同，`products/` 有意混合两种聚合形态：
+
+- **submodule 叶子**（`memoryrovol`、`cupolas`）—— 各自是独立仓库，固定到精确
+  commit。
+- **直接追踪模块**（`lang_gateway`）—— 源码由本仓自身管理的模块，暂无独立叶子仓。
 
 ## 仓库结构
 
 ```
 products/                       # 本管理仓（AGPL v3 + Apache 2.0）
-├── desktop/                    # git submodule → openairymax/desktop
-│                               #   Airymax Desktop GUI（Tauri v2 + React 18）
-├── docker/                     # git submodule → openairymax/docker
-│                               #   Docker 镜像 & docker-compose 编排栈
 ├── memoryrovol/                # git submodule → openairymax/memoryrovol  (闭源)
 │                               #   商业 L3/L4 记忆提供者（SPHARX EULA）
-├── .gitmodules                 # submodule 配置（3 个条目）
-├── .gitignore
+├── cupolas/                    # git submodule → openairymax/cupolas
+│                               #   安全穹顶 + 动态策略引擎（PDP）
+├── lang_gateway/               # 直接追踪的策略模块（暂无独立叶子仓）
+│                               #   推理语言网关（厂商面）
+├── .gitmodules                 # submodule 配置（2 个条目）
+├── .gitignore                  # 白名单：文件 + submodule 挂点
 ├── LICENSE                     # AGPL v3 + Apache 2.0（仅限管理仓本身）
 ├── NOTICE                      # 版权声明、商标与第三方组件说明
 ├── README.md                   # 英文版
 └── README_zh.md                # 简体中文版（本文件）
 ```
 
-## 叶子仓
+## 策略模块
 
-| 模块 | 仓库 URL | 许可证 | 说明 |
-|------|----------|--------|------|
-| **desktop** | `https://atomgit.com/openairymax/desktop.git` | AGPL v3 + Apache 2.0 | 跨平台桌面应用（Airymax Desktop GUI）—— 基于 Tauri v2 / React 18 / TypeScript / Vite 构建的个人客户端。 |
-| **docker** | `https://atomgit.com/openairymax/docker.git` | AGPL v3 + Apache 2.0 | 官方 Docker 镜像与 Docker Compose 编排栈，覆盖 AgentRT 运行时的开发、预发与生产部署。 |
-| **memoryrovol** | `https://atomgit.com/openairymax/memoryrovol.git` | SPHARX EULA v1.0（专有） | 商业闭源记忆提供者，实现 L3（结构层）与 L4（模式层）记忆。 |
+| 模块 | 形态 | 位置 | 许可证 | 说明 |
+|------|------|------|--------|------|
+| **memoryrovol** | submodule | `memoryrovol/` | SPHARX EULA v1.0（专有） | 商业闭源记忆提供者，实现 L3（结构层）与 L4（模式层）记忆。 |
+| **cupolas** | submodule | `cupolas/` | AGPL v3 + Apache 2.0 | 应用语义安全层：四层内生安全 + 动态策略引擎（策略决策点 PDP）。 |
+| **lang_gateway** | 直接追踪 | `lang_gateway/` | AGPL v3 + Apache 2.0 | 推理语言网关（`airy_lang_gateway`）—— 将自然语言输入标准化并路由至合适的模型。 |
 
-> **许可证说明。** `desktop` 与 `docker` 采用与 Airymax 平台其余部分一致的
+> **许可证说明。** `cupolas` 与 `lang_gateway` 采用与 Airymax 平台其余部分一致的
 > AGPL v3 + Apache 2.0 双许可证（SPDX：`AGPL-3.0-or-later OR Apache-2.0`）。
 > `memoryrovol` **不是**开源软件：受 SPHARX 商业 EULA v1.0 约束
 > （SPDX：`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`），其使用需要与授权层级
 > 绑定的 License Key。
 
-## 产品架构
+## 策略架构
 
-`products/` 下的三个叶子模块构成 Airymax 平台的**交付面** —— 即最终用户安装、
-运维部署、企业集成的产物。它们位于运行时 / SDK / 生态层的下游，不会向上游回
-馈代码。
+策略模块位于机制核**之上**并依赖机制核 —— 而非相反。内核暴露稳定的分派契约；
+每个策略模块在契约之后实现其一，且每个模块都有内核侧回退，使得模块缺席时降级而
+非崩溃。
 
 ```
-                  ┌────────────────────────────────────────┐
-                  │  上游源码层                            │
-                  │  sdk/  ·  agentrt/  ·  ecosystem/      │
-                  │ atoms/memory/memoryrovol/ (bridge API) │
-                  └──────────────────┬─────────────────────┘
-                                   │
-   ┌───────────────────────────────┼───────────────────────────────┐
-   │                               │                               │
-   ▼                               ▼                               ▼
-┌──────────────┐         ┌──────────────────┐         ┌──────────────────────┐
-│   desktop    │◀───────▶│      docker      │◀─link───│     memoryrovol      │
-│ 个人 GUI     │ 可选    │   OCI 镜像 +     │         │ L3 结构层           │
-│ Tauri v2 +   │ gateway │   docker-compose │         │ L4 模式层           │
-│ React 18     │ 后端    │   dev/staging/   │         │ (闭源，             │
-│ Win/macOS/Lnx│         │   prod           │         │  SPHARX EULA)       │
-└──────┬───────┘         └────────┬─────────┘         └──────────┬───────────┘
-       │                          │                              │
-       ▼                          ▼                              ▼
-   最终用户                  运维 / 企业部署                   AgentRT 运行时
-   (个人)                                                     (通过 AIRY_WITH_
-                                                              MEMORYROVOL=ON)
+                  ┌──────────────────────────────────────────────┐
+                  │  机制核（agentrt/）                            │
+                  │  atoms · commons · daemons · gateway          │
+                  │  heapstore · protocols · tools                │
+                  └───────────────────┬──────────────────────────┘
+                                      │  稳定契约：
+                                      │  ops 分派 · 弱符号 · submodule 固定
+        ┌─────────────────────────────┼─────────────────────────────┐
+        │                             │                             │
+        ▼                             ▼                             ▼
+┌──────────────────┐       ┌──────────────────┐       ┌──────────────────────┐
+│   memoryrovol    │       │     cupolas      │       │    lang_gateway      │
+│ L3 结构层        │       │ 沙箱 / RBAC      │       │ 推理语言             │
+│ L4 模式层        │       │ 净化 / 审计      │       │ 标准化 + 路由        │
+│ (闭源，          │       │ + 策略引擎       │       │ (ops 分派，          │
+│  SPHARX EULA)    │       │ (PDP)            │       │  内核回退)           │
+└────────┬─────────┘       └────────┬─────────┘       └──────────┬───────────┘
+         │                          │                            │
+         ▼                          ▼                            ▼
+   AgentRT 运行时             gateway / daemons             CoreLoopThree
+   (AIRY_WITH_MEMORYROVOL,   (在每个安全边界调用            (策略存在时经
+    弱符号桥)                  cupolas)                      are_ops_get_lang_gw)
 ```
-
-### desktop —— 个人客户端
-
-桌面应用将运行时、SDK 与生态能力打包为一个可安装的 GUI，基于 **Tauri v2**
-（Rust 内核）+ **React 18 + TypeScript + Vite** 前端构建。目标平台覆盖 Windows、
-macOS 与 Linux，支持离线优先 PWA 行为、系统托盘集成、全局快捷键，以及与本地
-运行的 AgentRT gateway 的内置连接。
-
-- **上游**：`agentrt/`（运行时 + SDK 的 gateway HTTP / WebSocket API）、
-  `products/docker/`（可选的伴随 gateway 后端）。
-- **下游**：最终用户（个人用户），安装产出的 `.exe` / `.dmg` / `.deb` /
-  `.AppImage` 制品。
-
-### docker —— 容器化部署
-
-Docker 模块为 AgentRT 运行时、daemon 服务、gateway、OpenLab 与桌面 Web 前端提
-供可复现、安全加固的 OCI 镜像，并提供三套 Docker Compose 编排，覆盖开发、预发
-与生产环境。
-
-- **镜像**：`Dockerfile.kernel`、`Dockerfile.daemon`、`Dockerfile.openlab`、
-  `Dockerfile.desktop`。
-- **编排栈**：`docker-compose.yml`（开发）、`docker-compose.staging.yml`、
-  `docker-compose.prod.yml`。
-  - **dev** —— 仅含 kernel、daemon 服务与 gateway，用于本地开发。
-  - **staging / prod** —— 额外包含 PostgreSQL、Redis、Prometheus + Grafana
-    可观测性栈，以及 OpenLab 与桌面 Web 服务。
-- **上游**：`agentrt/` 运行时源码树、
-  `products/desktop/` 源码（被 `Dockerfile.desktop` 消费）。
-- **下游**：DevOps / SRE / 企业运维人员，在开发、预发或生产环境中运行产出镜像。
 
 ### memoryrovol —— 商业记忆提供者
 
@@ -136,6 +110,35 @@ MemoryRovol：若链接了 MemoryRovol，桥将记忆调用路由给它；若未
   后端通过 `AIRY_MEMORY_BACKEND=builtin|memoryrovol` 选择）。
 - **许可证**：SPHARX 商业 EULA v1.0 —— 详见
   [§ MemoryRovol 许可证](#memoryrovol-许可证)。
+
+### cupolas —— 安全穹顶与策略引擎
+
+cupolas 是**应用语义安全层**：每个智能体动作在抵达内核前都必须经过该穹顶。它
+实现四层内生安全模型 —— 沙箱隔离、RBAC/ABAC 权限裁决、输入净化、审计追踪 —— 并
+构建单一静态库 `airy_cupolas`。在四层之上，它充当**策略决策点（PDP）**：动态
+策略引擎负责加载、校验、冲突检测、激活与版本回滚（JSON 规则集，可按版本回滚），
+随后分发到各 daemon，由每个 daemon 的**策略执行点（PEP）**通过本地缓存就地执行。
+
+- **上游**：`commons`（同步、错误框架、类型、内存宏）；沙箱所依赖的 Linux 内核
+  原语（Landlock、seccomp BPF）。
+- **下游**：`gateway` 与 `daemons` —— 在每个安全边界（请求鉴权、输入净化、权限
+  检查、审计发射）被调用。
+- **许可证**：AGPL v3 + Apache 2.0。
+
+### lang_gateway —— 推理语言网关
+
+`lang_gateway` 管理推理语言的全生命周期。用户输入不直接进入模型：网关先将其
+标准化为内部标准数据格式（Canonical Data Format），再路由给合适的模型，贯穿
+三个阶段 —— Phase 1（决策前：信号提取 + 多因子路由）、Phase 2（推理中：System
+Prompt 语言约束 + 输入转换）、Phase 3（输出后：语言漂移检测 + 术语一致性 +
+意译润色）。逐模型画像（`lang_ratio = zh_tokens / en_tokens`）经 `llm_d` 的
+`count_tokens` RPC 异步校准；`llm_d` 不可用时网关降级为启发式路由，不阻断主路径。
+
+- **契约**：数据类型契约与 ops 注入表位于机制核（`airy_lang_gw_ops.h`）；内核
+  消费者经 `are_ops_get_lang_gw()` 分派，不直接依赖本模块头文件。
+- **上游**：`airy_rt.h` 与内核侧 `airy_lang_gw_ops.h` 契约。
+- **下游**：策略存在时的 CoreLoopThree（机制核）；策略缺席时内核优雅降级。
+- **许可证**：AGPL v3 + Apache 2.0。
 
 ### 记忆分层
 
@@ -171,21 +174,20 @@ EULA v1.0**（SPDX：`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`）约束，由
 内的 [`LICENSE`](memoryrovol/LICENSE) 文件；外层管理仓的开源 AGPL v3 +
 Apache 2.0 许可证**不适用**于该 submodule。
 
-## 构建与部署
+## 构建与集成
 
 ### 前置条件
 
 - Git ≥ 2.30（支持 submodule）。
-- `desktop`：Node.js 18+、Rust（stable）工具链、Tauri v2 系统依赖
-  （依操作系统为 WebKit / GTK / MSVC）。
-- `docker`：Docker 20.10+、Docker Compose v2.20+。
 - `memoryrovol`（仅在链接进 AgentRT 时）：CMake 3.20+、C11 编译器、有效的
   MemoryRovol License Key。
+- `cupolas` 与 `lang_gateway`：C11 编译器；两者作为 CMake 目标
+  （`airy_cupolas`、`airy_lang_gateway`）被 AgentRT 构建消费。
 
 ### 带 submodule 克隆
 
 ```bash
-# 克隆管理仓及全部三个叶子 submodule
+# 克隆管理仓及其叶子 submodule
 git clone --recurse-submodules https://atomgit.com/openairymax/products.git
 
 # 若已克隆但未带 --recurse-submodules：
@@ -193,65 +195,9 @@ cd products
 git submodule update --init --recursive
 ```
 
-> **注意**：递归克隆会拉取 `memoryrovol`。获取源码**并不**授予 License Key；
-> 要在生产环境中实际链接并使用 MemoryRovol，仍需向 SPHARX Ltd. 申请 License
-> Key。
-
-### 构建桌面应用
-
-桌面模块是 Tauri v2 应用，由 npm 脚本驱动。完整平台相关说明见
-`desktop/README.md`。
-
-```bash
-cd desktop
-
-# 安装前端依赖
-npm install
-
-# 启动 Vite 开发服务器 + Tauri 开发壳
-npm run tauri dev
-
-# 类型检查 + lint + 前端生产构建
-npm run check
-
-# 构建平台原生安装包（.exe / .dmg / .deb / .AppImage）
-npm run tauri build
-```
-
-产物落在 `desktop/src-tauri/target/release/bundle/`。默认 gateway 端点为
-`http://localhost:8080`，可通过 `VITE_AGENTOS_GATEWAY_HOST` /
-`VITE_AGENTOS_GATEWAY_PORT` 覆盖（见 `desktop/.env.example`）。
-
-### 构建并运行 Docker 镜像
-
-Docker 模块提供四份多阶段 Dockerfile 与三套 Compose 编排栈。完整说明见
-`docker/README.md` 与 `docker/DEPLOYMENT.md`。
-
-```bash
-cd docker
-
-# 开发栈（kernel + daemon 服务 + gateway）
-docker compose --env-file .env.example up -d --build
-
-# 预发栈（额外包含 PostgreSQL、Redis、Prometheus + Grafana、
-# OpenLab 与桌面 Web 前端）
-docker compose -f docker-compose.staging.yml \
-    --env-file .env.staging.example up -d --build
-
-# 生产栈
-docker compose -f docker-compose.prod.yml \
-    --env-file .env.production.example up -d --build
-
-# 直接构建单个镜像（如 kernel 镜像）。
-# 构建上下文为平台工作区根目录（即包含 products/、agentrt/ 与 cmake/ 的目录），
-# 与 Compose 文件中的 `context: ../..` 一致。
-docker build -f Dockerfile.kernel -t airymax-kernel:local ../..
-```
-
-kernel 与 daemon 镜像以专用的非 root `agentrt` 用户（UID 1000）运行，OpenLab
-镜像以专用的非 root `openlab` 用户运行。staging 与生产 Compose 栈额外启用
-`read_only` 根文件系统、裁剪 Linux capabilities（`cap_drop`）与 seccomp
-profile，与 CIS Docker Benchmark 基线对齐。开发栈为便于本地使用放宽了这些设置。
+> **注意**：`memoryrovol` submodule 以 `update = none` 接线；递归克隆不会自动
+> 拉取它。且获取源码**并不**授予 License Key —— 要在生产环境中实际链接并使用
+> MemoryRovol，仍需向 SPHARX Ltd. 申请 License Key。
 
 ### 将 MemoryRovol 链接进 AgentRT 运行时（商业）
 
@@ -271,11 +217,16 @@ cmake --build build-agentrt -j
 将 `AIRY_MEMORY_BACKEND` 切回 `builtin`（默认值）后，运行时透明回退到内置的
 开源 L1/L2 提供者 —— 下游无需任何源码改动。
 
+> **禁止树内构建。** 依 Airymax 工程纪律，`airymaxhub` 源码树永不在原地构建。
+> `products/` 只承载策略模块源码与接线；所有编译均发生在外部构建树（见
+> `docs/AirymaxRT/50-engineering-standards`）。
+
 ## 分支策略
 
 - **本管理仓**：仅 `main` 分支。所有发行 tag 均在 `main` 上切出。
-- **叶子仓**（`desktop`、`docker`、`memoryrovol`）：`main` 为发行分支。
-  submodule 固定到精确 commit，保证本仓的每次检出均可复现。
+- **叶子仓**（`memoryrovol`、`cupolas`）：集成分支为 `dev/hubs-01`，`main` 为
+  发行快照。submodule 固定到精确 commit，保证本仓的每次检出均可复现。
+- **直接追踪模块**（`lang_gateway`）：与本仓同步版本化。
 
 ## 许可证
 
@@ -298,24 +249,26 @@ SPDX：`AGPL-3.0-or-later OR Apache-2.0`。可任选其一。两份许可证全�
 
 | 你的场景 | 选择 | 原因 |
 |----------|------|------|
-| 构建**SaaS 网络服务**并修改 Airymax 产品 | **AGPL v3** | 网络服务条款要求公开修改后的源代码 |
-| 开发**开源产品衍生作品**（copyleft 项目） | **AGPL v3** | 衍生作品必须同样以 AGPL 开源 |
-| 在**商业闭源部署**中使用 Airymax 产品 | **Apache 2.0** | 宽松许可证，允许闭源衍生 |
+| 构建**SaaS 网络服务**并修改这些策略模块 | **AGPL v3** | 网络服务条款要求公开修改后的源代码 |
+| 开发**开源衍生作品**（copyleft 项目） | **AGPL v3** | 衍生作品必须同样以 AGPL 开源 |
+| 在**商业闭源部署**中使用这些策略模块 | **Apache 2.0** | 宽松许可证，允许闭源衍生 |
 | 构建**企业内部工具** | **Apache 2.0** | 无需公开源代码 |
 | 需要**专利保护** | **Apache 2.0** | 贡献者明确授予专利使用权 |
 | 仅用于学习与研究 | **任一** | 两者均允许个人使用 |
 
-> **注意**：本双许可证指南仅适用于**管理仓本身**及 `desktop/` / `docker/` 子模块。`memoryrovol/` 子模块**不适用**本指南——它受 SPHARX 商业 EULA v1.0 约束，需要单独的 License Key。详见下方[§ 各 submodule 的许可证](#各-submodule-的许可证)。
+> **注意**：本双许可证指南仅适用于**管理仓本身**及 `cupolas/` / `lang_gateway/`
+> 模块。`memoryrovol/` 子模块**不适用**本指南——它受 SPHARX 商业 EULA v1.0 约束，
+> 需要单独的 License Key。详见下方[§ 各模块的许可证](#各模块的许可证)。
 
-### 各 submodule 的许可证
+### 各模块的许可证
 
-每个叶子 submodule 在其自身的 `LICENSE` 文件中携带**各自**的许可证；上述管理仓
-许可证不会覆盖它们：
+每个策略模块在其自身的 `LICENSE` 文件中携带**各自**的许可证；上述管理仓许可证
+不会覆盖它们：
 
-| Submodule | 许可证 | SPDX |
-|-----------|--------|------|
-| `desktop/` | AGPL v3 + Apache 2.0（双许可证） | `AGPL-3.0-or-later OR Apache-2.0` |
-| `docker/` | AGPL v3 + Apache 2.0（双许可证） | `AGPL-3.0-or-later OR Apache-2.0` |
+| 模块 | 许可证 | SPDX |
+|------|--------|------|
+| `cupolas/` | AGPL v3 + Apache 2.0（双许可证） | `AGPL-3.0-or-later OR Apache-2.0` |
+| `lang_gateway/` | AGPL v3 + Apache 2.0（双许可证） | `AGPL-3.0-or-later OR Apache-2.0` |
 | `memoryrovol/` | **SPHARX 商业 EULA v1.0（专有、闭源）** | `LicenseRef-SPHARX-MemoryRovol-EULA-1.0` |
 
 特别地，**`memoryrovol` 不是开源软件**，不受 AGPL v3 或 Apache 2.0 任一许可证
