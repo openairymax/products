@@ -157,6 +157,23 @@ set(COGNITION_SOURCES
     src/grad_llm_s2_plan.c
     src/grad_llm_s1_arbiter.c
     src/grad_run.c
+    # MC/TC 认知基座策略载荷（0.1.19 M5-4 §268，自 atoms/coreloopthree
+    # src/cognition/think/foundation 迁入；机制核仅留 tc.h/mc.h 契约 +
+    # ops 注入表，daemon 侧经 payload_registry 注表）
+    src/foundation/metacognition.c
+    src/foundation/thinking_chain.c
+    src/foundation/mc/mc_calibrate.c
+    src/foundation/mc/mc_correct.c
+    src/foundation/mc/mc_evaluate.c
+    src/foundation/mc/mc_learn.c
+    src/foundation/tc/tc_attention.c
+    src/foundation/tc/tc_context_window.c
+    src/foundation/tc/tc_memory.c
+    src/foundation/tc/tc_monitor.c
+    src/foundation/tc/tc_recovery.c
+    src/foundation/tc/tc_step.c
+    src/foundation/tc/tc_working_memory.c
+    src/payload_registry.c
 )
 set(COGNITION_HEADERS
     include/dispatch_strategy.h
@@ -165,6 +182,7 @@ set(COGNITION_HEADERS
     include/cog_review_strategy.h
     include/gccp_strategy.h
     include/grad_strategy.h
+    include/payload_registry.h
 )
 
 # 机制 ops 小库（airy_llm_ops）：协调策略载荷经注入表调用 LLM。embedded 形态
@@ -180,6 +198,7 @@ add_library(airy_cognition_strategy STATIC
 
 target_include_directories(airy_cognition_strategy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation
 )
 
 # 契约面 PUBLIC 传播：本库公共头含 include 的契约头裸名（dispatch_strategy.h
@@ -386,6 +405,66 @@ if(BUILD_TESTS)
         target_link_libraries(test_grad_strategy PRIVATE pthread dl m)
     endif()
     add_test(NAME cognition_grad_tests COMMAND test_grad_strategy)
+
+    # MC 元认知策略载荷测试（双模式）：被测符号全部为 airy_mc_* 载荷
+    # AIRY_API（0.1.19 M5-4 §268 自 atoms 迁入），embedded/standalone 均
+    # 仅链本库；载荷内部头（metacognition.h/thinking_chain.h）由
+    # src/foundation 解析，契约头由 COG_CONTRACT_DIR 解析。
+    add_executable(test_metacognition_calibration tests/unit/test_metacognition_calibration.c)
+    target_compile_definitions(test_metacognition_calibration PRIVATE AIRY_COMPLIANCE_IMPL)
+    target_include_directories(test_metacognition_calibration PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+    )
+    target_link_libraries(test_metacognition_calibration PRIVATE airy_cognition_strategy)
+    if(NOT MSVC)
+        target_link_libraries(test_metacognition_calibration PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_mc_calibration_tests COMMAND test_metacognition_calibration)
+
+    # 机制核集成测试（embedded-only）：被测符号横跨机制核（airy_cognition_*/
+    # airy_hook_*/airy_intent_parser_*/airy_plan_reactive_create）与 MC/TC
+    # 载荷（airy_tc_working_memory_*），仅在 agentrt 超级构建（机制核
+    # airy_coreloopthree 目标存在）时挂载；standalone 形态无机制核，不建。
+    # 机制公开头（cognition.h/memory.h）由 COG_CONTRACT_DIR 解析，机制侧
+    # 反思规划契约（planner/plan_strategy.h）由机制 think src 路径解析，
+    # 载荷内部头由 src、src/foundation 解析。airy_coreloopthree 的 PUBLIC
+    # 闭包已收口 atoms 域 + 零依赖 ops 归档（daemons 断链），无 svc 系
+    # 传递依赖。
+    if(TARGET airy_coreloopthree)
+        foreach(COG_MECH_TEST test_cognition;test_cognition_e2e;test_hook_integration;test_reactive_planner;test_thread_safety)
+            set(COG_MECH_EXTRA "")
+            if(COG_MECH_TEST STREQUAL test_thread_safety)
+                set(COG_MECH_EXTRA
+                    tests/unit/test_thread_safety_int0201.c
+                    tests/unit/test_thread_safety_int0202.c)
+            endif()
+            add_executable(${COG_MECH_TEST} tests/unit/${COG_MECH_TEST}.c ${COG_MECH_EXTRA})
+            target_compile_definitions(${COG_MECH_TEST} PRIVATE AIRY_COMPLIANCE_IMPL)
+            target_include_directories(${COG_MECH_TEST} PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
+                ${CMAKE_CURRENT_SOURCE_DIR}/src
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests
+                ${COG_CONTRACT_DIR}
+                "${COG_CONTRACT_DIR}/../src/cognition/think"
+                ${AIRY_COREKERN_INCLUDE_DIR}
+            )
+            target_link_libraries(${COG_MECH_TEST} PRIVATE
+                airy_cognition_strategy
+                airy_coreloopthree)
+            if(MSVC)
+                target_compile_options(${COG_MECH_TEST} PRIVATE "/FIairy_memory.h")
+            else()
+                target_compile_options(${COG_MECH_TEST} PRIVATE "SHELL:-include airy_memory.h")
+                target_link_libraries(${COG_MECH_TEST} PRIVATE pthread dl m)
+            endif()
+            add_test(NAME cognition_${COG_MECH_TEST} COMMAND ${COG_MECH_TEST})
+        endforeach()
+    endif()
 endif()
 
 install(TARGETS airy_cognition_strategy
@@ -396,5 +475,6 @@ install(TARGETS airy_cognition_strategy
 
 install(FILES include/dispatch_strategy.h include/plan_strategy.h include/coord_strategy.h
     include/cog_review_strategy.h include/gccp_strategy.h include/grad_strategy.h
+    include/payload_registry.h
     DESTINATION include/agentrt/cognition
 )
