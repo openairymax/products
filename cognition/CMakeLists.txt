@@ -182,6 +182,10 @@ set(COGNITION_SOURCES
     src/intent/intent_parser_ops.c
     src/intent/intent_classifier.c
     src/intent/entity_extractor.c
+    # 认知进化策略载荷（0.1.19 M5-4 §270，自 atoms/coreloopthree
+    # src/cognition/think/ext 迁入；零机制侧消费者的独立认知策略域。
+    # MAC 协作运行时三源系 sched_d 硬依赖的机制，留机制核不迁）
+    src/ext/cognitive_evolution.c
     src/payload_registry.c
 )
 set(COGNITION_HEADERS
@@ -192,6 +196,7 @@ set(COGNITION_HEADERS
     include/gccp_strategy.h
     include/grad_strategy.h
     include/payload_registry.h
+    include/cognitive_evolution.h
 )
 
 # 机制 ops 小库（airy_llm_ops）：协调策略载荷经注入表调用 LLM。embedded 形态
@@ -209,6 +214,7 @@ target_include_directories(airy_cognition_strategy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation
     ${CMAKE_CURRENT_SOURCE_DIR}/src/intent
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ext
 )
 
 # 契约面 PUBLIC 传播：本库公共头含 include 的契约头裸名（dispatch_strategy.h
@@ -472,6 +478,22 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME cognition_intent_parser_tests COMMAND test_intent_parser)
 
+    # 认知进化策略载荷测试（双模式）：被测符号全部为 cog_evolution_*
+    # 载荷 AIRY_API（0.1.19 M5-4 §270 自 atoms 迁入），零机制侧符号
+    # 依赖，embedded/standalone 均仅链本库；契约头自足（仅 std 头）。
+    add_executable(test_cognitive_evolution tests/unit/test_cognitive_evolution.c)
+    target_compile_definitions(test_cognitive_evolution PRIVATE AIRY_COMPLIANCE_IMPL)
+    target_include_directories(test_cognitive_evolution PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+    )
+    target_link_libraries(test_cognitive_evolution PRIVATE airy_cognition_strategy)
+    if(NOT MSVC)
+        target_link_libraries(test_cognitive_evolution PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_evolution_tests COMMAND test_cognitive_evolution)
+
     # 机制核集成测试（embedded-only）：被测符号横跨机制核（airy_cognition_*/
     # airy_hook_*/airy_intent_parser_*/airy_plan_reactive_create）与 MC/TC
     # 载荷（airy_tc_working_memory_*），仅在 agentrt 超级构建（机制核
@@ -522,6 +544,6 @@ install(TARGETS airy_cognition_strategy
 
 install(FILES include/dispatch_strategy.h include/plan_strategy.h include/coord_strategy.h
     include/cog_review_strategy.h include/gccp_strategy.h include/grad_strategy.h
-    include/payload_registry.h
+    include/payload_registry.h include/cognitive_evolution.h
     DESTINATION include/agentrt/cognition
 )
