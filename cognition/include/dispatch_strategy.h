@@ -35,9 +35,8 @@ extern "C" {
 /**
  * @brief 加权分发策略配置（三因子权重）。
  *
- * 独立命名空间：commons/utils/strategy/strategy_common.h 亦导出同名
- * weighted_config_t，本库公共头具备被消费者与 commons 头同时包含的
- * 可能，故以 airy_dispatching_ 前缀消歧。
+ * 以 airy_dispatching_ 前缀维持独立命名空间，避免与消费者侧
+ * 头文件中的同名类型冲突。
  */
 typedef struct airy_dispatching_weighted_config {
     float cost_weight;
