@@ -148,6 +148,15 @@ set(COGNITION_SOURCES
     src/gccp.c
     src/gccp_llm_json.c
     src/gccp_heuristic.c
+    # GRAD 计划级批判环策略载荷（0.1.19 M5-4 §267，自 atoms/coreloopthree
+    # src/cognition/grad 迁入；机制核仅留 grad.h 契约 + 机制面分发）
+    src/grad_verifier.c
+    src/grad_coordinator.c
+    src/grad_llm_ws.c
+    src/grad_llm_call.c
+    src/grad_llm_s2_plan.c
+    src/grad_llm_s1_arbiter.c
+    src/grad_run.c
 )
 set(COGNITION_HEADERS
     include/dispatch_strategy.h
@@ -155,6 +164,7 @@ set(COGNITION_HEADERS
     include/coord_strategy.h
     include/cog_review_strategy.h
     include/gccp_strategy.h
+    include/grad_strategy.h
 )
 
 # 机制 ops 小库（airy_llm_ops）：协调策略载荷经注入表调用 LLM。embedded 形态
@@ -337,6 +347,45 @@ if(BUILD_TESTS)
         target_link_libraries(test_gccp_strategy PRIVATE pthread dl m)
     endif()
     add_test(NAME cognition_gccp_tests COMMAND test_gccp_strategy)
+
+    # GRAD 计划级批判环策略载荷测试：协调器/验证器/工作区/S2 计划/B 仲裁/
+    # 运行闭环等被测符号全部位于本库（含 grad_run）；计划数据模型
+    # （airy_task_plan_free/airy_plan_parse，plan_model.c）在 embedded 由
+    # airy_cognition 目标提供，standalone 直编其实现单元（零机制依赖，
+    # 镜像 COG_GCCP_TEST_SRCS 范式）；cJSON 依赖镜像 test_cog_review_strategy。
+    set(COG_GRAD_TEST_SRCS "")
+    if(NOT TARGET airy_cognition)
+        set(COG_GRAD_TEST_SRCS
+            "${COG_CONTRACT_DIR}/../src/cognition/think/plan_model.c")
+    endif()
+    add_executable(test_grad_strategy tests/unit/test_grad.c
+        tests/unit/test_grad_verifiers.c
+        tests/unit/test_grad_coordinator.c
+        tests/unit/test_grad_arbiter.c
+        tests/unit/test_grad_misc.c
+        ${COG_GRAD_TEST_SRCS})
+    target_compile_definitions(test_grad_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
+    if(_cog_cjson_libs)
+        target_compile_definitions(test_grad_strategy PRIVATE AIRY_HAS_CJSON=1)
+    endif()
+    target_include_directories(test_grad_strategy PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+        ${_cog_cjson_inc}
+    )
+    target_link_libraries(test_grad_strategy PRIVATE airy_cognition_strategy)
+    if(TARGET airy_cognition)
+        target_link_libraries(test_grad_strategy PRIVATE airy_cognition)
+    endif()
+    if(_cog_cjson_libs)
+        target_link_libraries(test_grad_strategy PRIVATE ${_cog_cjson_libs})
+    endif()
+    if(NOT MSVC)
+        target_link_libraries(test_grad_strategy PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_grad_tests COMMAND test_grad_strategy)
 endif()
 
 install(TARGETS airy_cognition_strategy
@@ -346,6 +395,6 @@ install(TARGETS airy_cognition_strategy
 )
 
 install(FILES include/dispatch_strategy.h include/plan_strategy.h include/coord_strategy.h
-    include/cog_review_strategy.h include/gccp_strategy.h
+    include/cog_review_strategy.h include/gccp_strategy.h include/grad_strategy.h
     DESTINATION include/agentrt/cognition
 )
