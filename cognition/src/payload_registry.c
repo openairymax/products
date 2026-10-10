@@ -3,9 +3,9 @@
 
 /**
  * @file payload_registry.c
- * @brief TC/MC/Intent ops 静态装配——机制核契约面到载荷实现符号的唯一映射点。
+ * @brief TC/MC/Intent/Plan ops 静态装配——机制核契约面到载荷实现符号的唯一映射点。
  *
- * 装配约定（0.1.19 M5-4）：28 项 ops 中 23 项直引载荷库 AIRY_API 符号
+ * 装配约定（0.1.19 M5-4）：30 项 ops 中 23 项直引载荷库 AIRY_API 符号
  * （零包装）；5 项经 static 适配器——ctx_append/ctx_recent/wm_store/
  * wm_retrieve 因契约头 tc.h 将 ctx/wm 子件寻址统一为 chain 首参（机制侧
  * 只持 chain 句柄，子件指针是载荷内部知识），适配器在此解析 chain->
@@ -19,6 +19,7 @@
 #include "foundation/metacognition.h"
 #include "foundation/thinking_chain.h"
 #include "intent_classifier.h"
+#include "plan_strategy.h"
 
 /* ---- chain 首参适配器：解析内嵌子件后转发实现 ---- */
 
@@ -90,6 +91,11 @@ static const airy_intent_ops_t g_intent_payload_ops = {
     .classify = airy_intent_classify,
 };
 
+static const airy_plan_ops_t g_plan_payload_ops = {
+    .create_reactive = airy_plan_reactive_create,
+    .create_reflective = airy_plan_reflective_create,
+};
+
 const airy_tc_ops_t *cog_payload_tc(void)
 {
     return &g_tc_payload_ops;
@@ -103,4 +109,9 @@ const airy_mc_ops_t *cog_payload_mc(void)
 const airy_intent_ops_t *cog_payload_intent(void)
 {
     return &g_intent_payload_ops;
+}
+
+const airy_plan_ops_t *cog_payload_plan(void)
+{
+    return &g_plan_payload_ops;
 }

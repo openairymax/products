@@ -3,18 +3,21 @@
 
 /**
  * @file plan_strategy.h
- * @brief 规划策略产品库公共接口（products/cognition，M5-4 迁出，台账 §262）。
+ * @brief 规划策略产品库公共接口（products/cognition，M5-4 迁出，台账 §262/§271）。
  *
- * 机制/策略切分：本库为认知规划的策略载荷——分层（hierarchical）与
- * 机器学习（ml）两类规划策略实现，均实现机制核公共契约
- * airy_plan_strategy_t（atoms/coreloopthree/include/cognition.h）。机制核
- * 不链接本库、不携带默认策略；两工厂在迁出前扇入为 0（A 通道死件候选，
- * G28），迁出后由生态层按需装配。
+ * 机制/策略切分：本库为认知规划的策略载荷——分层（hierarchical）、
+ * 机器学习（ml）、反应式（reactive）与反思式（reflective）四类规划
+ * 策略实现，均实现机制核公共契约 airy_plan_strategy_t
+ * （atoms/coreloopthree/include/cognition.h）。机制核不链接本库、
+ * 不携带默认策略；策略工厂经 airy_plan_ops.h 契约由 daemon（think_d）
+ * 启动期经 are_ops_set_plan() 注入（payload_registry 装配），ops 缺席
+ * 时引擎裸启动（BAN-257，process 期 fail fast）。
  *
- * 归位说明：原地为 atoms/coreloopthree/src/cognition/think/planner/，按
- * "机制留核、策略迁生态层"归一至 products 装配仓。计划节点回收机制件
- * （plan_node_free / plan_nodes_reclaim）随迁提升为机制公共契约头
- * airy_plan_nodes.h（static inline，机制核内 reactive 与机制外策略共享）。
+ * 归位说明：reactive/reflective 原地为 atoms/coreloopthree/src/
+ * cognition/think/planner/（§271 迁入），hierarchical/ml 为 §262 首批
+ * 迁入；族内七件归格 src/planner/。计划节点回收机制件（plan_node_free /
+ * plan_nodes_reclaim）已提升为机制公共契约头 airy_plan_nodes.h
+ * （static inline，机制核与机制外策略共享）。
  */
 
 #ifndef AIRY_PRODUCTS_COGNITION_PLAN_STRATEGY_H
@@ -47,6 +50,22 @@ airy_plan_strategy_t *airy_plan_hierarchical_create(airy_llm_service_t *llm, int
  * @return Strategy object, or NULL on failure
  */
 airy_plan_strategy_t *airy_plan_ml_create(const char *model_path, airy_llm_service_t *llm);
+
+/**
+ * @brief Create a reactive planning strategy (keyword rules + LLM assist).
+ * @param llm LLM service handle (NULL selects the keyword rule path)
+ * @return Strategy object, or NULL on failure
+ */
+airy_plan_strategy_t *airy_plan_reactive_create(airy_llm_service_t *llm);
+
+/**
+ * @brief Create a reflective replanning strategy (5-stage pipeline).
+ * @param llm LLM service handle (NULL builds keyword fallback plans)
+ * @param memory_engine Memory engine for historical-experience lookup
+ * @return Strategy object, or NULL on failure
+ */
+airy_plan_strategy_t *airy_plan_reflective_create(airy_llm_service_t *llm,
+                                                  airy_memory_engine_t *memory_engine);
 
 #ifdef __cplusplus
 }

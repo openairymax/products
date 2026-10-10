@@ -29,7 +29,7 @@
 #include "payload_registry.h"
 #include "test_thread_safety_internal.h"
 
-#include "planner/plan_strategy.h"
+#include "plan_strategy.h"
 
 /* ============================================================================
  * 策略注入: 按 DT-01/DT-04 注入调用方策略（机制与策略分离，机制核零策略载荷）
