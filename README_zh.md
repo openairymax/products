@@ -1,8 +1,8 @@
 # Airymax 产品层 — 策略模块聚合
 
 > Airymax AI 智能体运行时平台的**策略模块聚合仓**。将平台中承载「策略」的模块
-> —— 商业 MemoryRovol 记忆提供者、`cupolas` 安全穹顶、推理语言网关 —— 汇集于
-> 统一的管理面之下，使策略载荷与机制核保持物理分离。
+> —— 商业 MemoryRovol 记忆提供者、`cupolas` 安全穹顶、推理语言网关、`cognition`
+> 认知策略载荷 —— 汇集于统一的管理面之下，使策略载荷与机制核保持物理分离。
 
 **语言:** [English](README.md) | 简体中文
 
@@ -21,6 +21,8 @@
   以及动态策略引擎（策略决策点 PDP）。
 - **lang_gateway** —— 推理语言网关：推理语言全生命周期管理（信号提取、多因子
   模型路由、System Prompt 语言约束、输出后处理）。
+- **cognition** —— 认知策略载荷：分发、规划、协调、审查、意图策略，由 daemon
+  启动期注入。
 
 本仓遵循平台的**机制 / 策略分离**原则：机制核位于
 [`agentrt/`](../agentrt)（atoms · commons · daemons · gateway · heapstore ·
@@ -32,7 +34,8 @@ protocols · tools），而策略形态的模块位于本仓，并通过稳定�
 
 - **submodule 叶子**（`memoryrovol`、`cupolas`）—— 各自是独立仓库，固定到精确
   commit。
-- **直接追踪模块**（`lang_gateway`）—— 源码由本仓自身管理的模块，暂无独立叶子仓。
+- **直接追踪模块**（`lang_gateway`、`cognition`）—— 源码由本仓自身管理的模块，
+  暂无独立叶子仓。
 
 ## 仓库结构
 
@@ -44,6 +47,8 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
 │                               #   安全穹顶 + 动态策略引擎（PDP）
 ├── lang_gateway/               # 直接追踪的策略模块（暂无独立叶子仓）
 │                               #   推理语言网关（厂商面）
+├── cognition/                  # 直接追踪的策略模块（暂无独立叶子仓）
+│                               #   认知策略载荷（分发 · 规划 · …）
 ├── .gitmodules                 # submodule 配置（2 个条目）
 ├── .gitignore                  # 白名单：文件 + submodule 挂点
 ├── LICENSE                     # AGPL v3 + Apache 2.0（仅限管理仓本身）
@@ -59,9 +64,11 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
 | **memoryrovol** | submodule | `memoryrovol/` | SPHARX EULA v1.0（专有） | 商业闭源记忆提供者，实现 L3（结构层）与 L4（模式层）记忆。 |
 | **cupolas** | submodule | `cupolas/` | AGPL v3 + Apache 2.0 | 应用语义安全层：四层内生安全 + 动态策略引擎（策略决策点 PDP）。 |
 | **lang_gateway** | 直接追踪 | `lang_gateway/` | AGPL v3 + Apache 2.0 | 推理语言网关（`airy_lang_gateway`）—— 将自然语言输入标准化并路由至合适的模型。 |
+| **cognition** | 直接追踪 | `cognition/` | AGPL v3 + Apache 2.0 | 认知策略载荷（`airy_cognition_strategy`）—— 分发、规划、协调、审查、意图策略，注入 daemon。 |
 
-> **许可证说明。** `cupolas` 与 `lang_gateway` 采用与 Airymax 平台其余部分一致的
-> AGPL v3 + Apache 2.0 双许可证（SPDX：`AGPL-3.0-or-later OR Apache-2.0`）。
+> **许可证说明。** `cupolas`、`lang_gateway` 与 `cognition` 采用与 Airymax 平台其余
+> 部分一致的 AGPL v3 + Apache 2.0 双许可证
+> （SPDX：`AGPL-3.0-or-later OR Apache-2.0`）。
 > `memoryrovol` **不是**开源软件：受 SPHARX 商业 EULA v1.0 约束
 > （SPDX：`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`），其使用需要与授权层级
 > 绑定的 License Key。
@@ -73,28 +80,21 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
 非崩溃。
 
 ```
-                  ┌──────────────────────────────────────────────┐
-                  │  机制核（agentrt/）                            │
-                  │  atoms · commons · daemons · gateway          │
-                  │  heapstore · protocols · tools                │
-                  └───────────────────┬──────────────────────────┘
-                                      │  稳定契约：
-                                      │  ops 分派 · 弱符号 · submodule 固定
-        ┌─────────────────────────────┼─────────────────────────────┐
-        │                             │                             │
-        ▼                             ▼                             ▼
-┌──────────────────┐       ┌──────────────────┐       ┌──────────────────────┐
-│   memoryrovol    │       │     cupolas      │       │    lang_gateway      │
-│ L3 结构层        │       │ 沙箱 / RBAC      │       │ 推理语言             │
-│ L4 模式层        │       │ 净化 / 审计      │       │ 标准化 + 路由        │
-│ (闭源，          │       │ + 策略引擎       │       │ (ops 分派，          │
-│  SPHARX EULA)    │       │ (PDP)            │       │  内核回退)           │
-└────────┬─────────┘       └────────┬─────────┘       └──────────┬───────────┘
-         │                          │                            │
-         ▼                          ▼                            ▼
-   AgentRT 运行时             gateway / daemons             CoreLoopThree
-   (AIRY_WITH_MEMORYROVOL,   (在每个安全边界调用            (策略存在时经
-    弱符号桥)                  cupolas)                      are_ops_get_lang_gw)
+         ┌──────────────────────────────────────┐
+         │  机制核（agentrt/）                  │
+         │  atoms · commons · daemons · gateway │
+         │  heapstore · protocols · tools       │
+         └───────────────────┬──────────────────┘
+                             │  稳定契约：
+                             │  ops 分派 · 弱符号 · submodule 固定
+                             ▼
+   策略模块（products/）：
+   ┌──────────────┬─────────────────────────────────────────┐
+   │ memoryrovol  │ AgentRT 运行时（AIRY_WITH_MEMORYROVOL） │
+   │ cupolas      │ gateway / daemons（每个安全边界）       │
+   │ lang_gateway │ CoreLoopThree（are_ops_get_lang_gw）    │
+   │ cognition    │ daemon 启动期（注入式策略）             │
+   └──────────────┴─────────────────────────────────────────┘
 ```
 
 ### memoryrovol —— 商业记忆提供者

@@ -2,9 +2,9 @@
 
 > Policy-module aggregation repository for the Airymax AI Agent Runtime
 > Platform. Collects the platform's policy-type modules — the commercial
-> MemoryRovol memory provider, the `cupolas` security dome, and the
-> inference language gateway — under a single management surface, keeping
-> policy payloads out of the mechanism core.
+> MemoryRovol memory provider, the `cupolas` security dome, the inference
+> language gateway, and the `cognition` strategy payloads — under a single
+> management surface, keeping policy payloads out of the mechanism core.
 
 **Language:** English | [简体中文](README_zh.md)
 
@@ -27,6 +27,9 @@ from the mechanism kernel:
 - **lang_gateway** — the inference language gateway: inference-language
   lifecycle management (signal extraction, multi-factor model routing,
   system-prompt language constraint, output post-processing).
+- **cognition** — the cognitive strategy payloads: dispatch, planning,
+  coordination, review, and intent strategies, injected into the daemons at
+  startup.
 
 This repository follows the platform's **mechanism / policy separation**
 principle: the mechanism kernel lives in
@@ -42,8 +45,9 @@ aggregation — `products/` mixes two aggregation styles on purpose:
 
 - **submodule leaves** (`memoryrovol`, `cupolas`) — each is an independent
   repository pinned to an exact commit.
-- **directly-tracked modules** (`lang_gateway`) — a module whose source is
-  managed by this repository itself, with no independent leaf repository yet.
+- **directly-tracked modules** (`lang_gateway`, `cognition`) — modules whose
+  source is managed by this repository itself, with no independent leaf
+  repository yet.
 
 ## Repository Structure
 
@@ -55,6 +59,8 @@ products/                       # this management repository (AGPL v3 + Apache 2
 │                               #   Security dome + dynamic policy engine (PDP)
 ├── lang_gateway/               # directly-tracked policy module (no leaf repo yet)
 │                               #   Inference language gateway (provider-facing)
+├── cognition/                  # directly-tracked policy module (no leaf repo yet)
+│                               #   Cognitive strategy payloads (dispatch · plan · …)
 ├── .gitmodules                 # submodule wiring (2 entries)
 ├── .gitignore                  # whitelist: files + submodule mount points
 ├── LICENSE                     # AGPL v3 + Apache 2.0 (management repo only)
@@ -70,9 +76,10 @@ products/                       # this management repository (AGPL v3 + Apache 2
 | **memoryrovol** | submodule | `memoryrovol/` | SPHARX EULA v1.0 (proprietary) | Commercial closed-source memory provider implementing the L3 (Structure) and L4 (Pattern) memory layers. |
 | **cupolas** | submodule | `cupolas/` | AGPL v3 + Apache 2.0 | Application-semantic security layer: four-layer inherent security plus the dynamic policy engine (Policy Decision Point). |
 | **lang_gateway** | direct | `lang_gateway/` | AGPL v3 + Apache 2.0 | Inference language gateway (`airy_lang_gateway`) — canonicalizes natural-language input and routes it to the right model. |
+| **cognition** | direct | `cognition/` | AGPL v3 + Apache 2.0 | Cognitive strategy payloads (`airy_cognition_strategy`) — dispatch, planning, coordination, review and intent strategies injected into the daemons. |
 
-> **Licensing note.** `cupolas` and `lang_gateway` use the same AGPL v3 +
-> Apache 2.0 dual license as the rest of the Airymax platform
+> **Licensing note.** `cupolas`, `lang_gateway` and `cognition` use the same
+> AGPL v3 + Apache 2.0 dual license as the rest of the Airymax platform
 > (SPDX: `AGPL-3.0-or-later OR Apache-2.0`). `memoryrovol` is **not**
 > open-source: it is governed by the SPHARX Commercial EULA v1.0
 > (SPDX: `LicenseRef-SPHARX-MemoryRovol-EULA-1.0`) and its use requires a
@@ -86,28 +93,21 @@ policy module implements one behind that contract, and every module has a
 kernel-side fallback so an absent module degrades rather than breaks.
 
 ```
-                  ┌──────────────────────────────────────────────┐
-                  │  Mechanism kernel (agentrt/)                  │
-                  │  atoms · commons · daemons · gateway          │
-                  │  heapstore · protocols · tools                │
-                  └───────────────────┬──────────────────────────┘
-                                      │  stable contracts:
-                                      │  ops dispatch · weak symbols · submodule pin
-        ┌─────────────────────────────┼─────────────────────────────┐
-        │                             │                             │
-        ▼                             ▼                             ▼
-┌──────────────────┐       ┌──────────────────┐       ┌──────────────────────┐
-│   memoryrovol    │       │     cupolas      │       │    lang_gateway      │
-│ L3 Structure     │       │ sandbox / RBAC   │       │ inference-language   │
-│ L4 Pattern       │       │ sanitize / audit │       │ canonicalize+route   │
-│ (closed-source,  │       │ + policy engine  │       │ (ops-dispatched,     │
-│  SPHARX EULA)    │       │ (PDP)            │       │  kernel fallback)    │
-└────────┬─────────┘       └────────┬─────────┘       └──────────┬───────────┘
-         │                          │                            │
-         ▼                          ▼                            ▼
-   AgentRT runtime           gateway / daemons            CoreLoopThree
-   (AIRY_WITH_MEMORYROVOL,   (call cupolas at every       (are_ops_get_lang_gw)
-    weak-symbol bridge)       security boundary)           when the policy is present
+                  ┌─────────────────────────────────────┐
+                  │  Mechanism kernel (agentrt/)        │
+                  │  atoms · commons · daemons · gateway│
+                  │  heapstore · protocols · tools      │
+                  └──────────────────┬──────────────────┘
+                                     │  stable contracts:
+                                     │  ops dispatch · weak symbols · submodule pin
+                                     ▼
+   Policy modules (products/):
+   ┌──────────────┬────────────────────────────────────────────┐
+   │ memoryrovol  │ AgentRT runtime (AIRY_WITH_MEMORYROVOL)    │
+   │ cupolas      │ gateway / daemons (each security boundary) │
+   │ lang_gateway │ CoreLoopThree (are_ops_get_lang_gw)        │
+   │ cognition    │ daemon startup (ops-injected strategy)     │
+   └──────────────┴────────────────────────────────────────────┘
 ```
 
 ### memoryrovol — Commercial Memory Provider
@@ -167,6 +167,28 @@ to heuristic routing without blocking the main path.
   present; the kernel degrades gracefully when it is not.
 - **License**: AGPL v3 + Apache 2.0.
 
+### cognition — Cognitive Strategy Payloads
+
+`cognition` carries the *strategy* half of the runtime's cognition stage,
+migrated out of the mechanism core (`atoms/coreloopthree`) under the
+mechanism / policy separation program. The kernel keeps only the contract
+data types and the ops dispatch surface (`cognition.h`); this module
+implements dispatch (weighted / round-robin / priority / ML), planning
+(reactive / hierarchical / reflective / ML), coordination, cognitive
+parallel review, GRAD plan-and-critique, intent parsing, and the
+metacognition / thinking-chain foundations. Consumers create strategy
+instances through the module's factories and inject them at daemon startup
+via `airy_cognition_set_dispatching_strategy()` (ownership transferred).
+
+- **Contract**: the `cognition.h` data-type and dispatch surface in the
+  mechanism kernel; the kernel never links this library and ships no default
+  strategy.
+- **Upstream**: `airy_rt.h`, the kernel-side `cognition.h` contract and the
+  `commons` atoms.
+- **Downstream**: the daemons, which inject the strategies at startup; the
+  kernel stays functional with degraded built-in behavior when absent.
+- **License**: AGPL v3 + Apache 2.0.
+
 ### Memory Stratification
 
 ```
@@ -213,9 +235,9 @@ the surrounding management repository **does not apply** to that submodule.
 - Git ≥ 2.30 (with submodule support).
 - For `memoryrovol` (only when linking into AgentRT): CMake 3.20+, a
   C11 compiler, and a valid MemoryRovol License Key.
-- For `cupolas` and `lang_gateway`: a C11 compiler; the modules are consumed
-  by the AgentRT build as CMake targets (`airy_cupolas`,
-  `airy_lang_gateway`).
+- For `cupolas`, `lang_gateway` and `cognition`: a C11 compiler; the modules
+  are consumed by the AgentRT build as CMake targets (`airy_cupolas`,
+  `airy_lang_gateway`, `airy_cognition_strategy`).
 
 ### Clone with submodules
 
@@ -266,8 +288,8 @@ runtime transparently fall back to the open-source L1/L2 built-in provider
 - **Leaf repositories** (`memoryrovol`, `cupolas`): their integration branch is
   `dev/hubs-01`; `main` is the release snapshot. Submodules are pinned to
   exact commits so that every checkout of this repository is reproducible.
-- **Directly-tracked modules** (`lang_gateway`): versioned in lock-step with
-  this repository.
+- **Directly-tracked modules** (`lang_gateway`, `cognition`): versioned in
+  lock-step with this repository.
 
 ## License
 
@@ -300,7 +322,8 @@ You may choose **either** license at your option — not both, not neither.
 | Just learning or researching | **Either** | Both permit personal use |
 
 > **Note**: This dual-license guide applies to the **management repository**
-> and the `cupolas/` / `lang_gateway/` modules. The `memoryrovol/` submodule
+> and the `cupolas/` / `lang_gateway/` / `cognition/` modules. The
+> `memoryrovol/` submodule
 > is **NOT** covered by this guide — it is governed by the SPHARX Commercial
 > EULA v1.0 and requires a separate License Key. See
 > [§ Per-module licensing](#per-module-licensing) below.
@@ -314,6 +337,7 @@ the management-repository license above does not override them:
 |--------|---------|------|
 | `cupolas/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
 | `lang_gateway/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
+| `cognition/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
 | `memoryrovol/` | **SPHARX Commercial EULA v1.0 (proprietary, closed-source)** | `LicenseRef-SPHARX-MemoryRovol-EULA-1.0` |
 
 In particular, **`memoryrovol` is NOT open source** and is not covered by
