@@ -145,12 +145,16 @@ set(COGNITION_SOURCES
     src/coord_arbiter.c
     src/coord_adapter.c
     src/cog_review.c
+    src/gccp.c
+    src/gccp_llm_json.c
+    src/gccp_heuristic.c
 )
 set(COGNITION_HEADERS
     include/dispatch_strategy.h
     include/plan_strategy.h
     include/coord_strategy.h
     include/cog_review_strategy.h
+    include/gccp_strategy.h
 )
 
 # 机制 ops 小库（airy_llm_ops）：协调策略载荷经注入表调用 LLM。embedded 形态
@@ -299,6 +303,40 @@ if(BUILD_TESTS)
         target_link_libraries(test_cog_review_strategy PRIVATE pthread dl m)
     endif()
     add_test(NAME cognition_cog_review_tests COMMAND test_cog_review_strategy)
+
+    # GCCP 策略载荷测试：数据模型释放（gccp_goal.c）与 ops 注入表
+    # （ops_injection.c）符号在 embedded 由 airy_coreloopthree 目标提供；
+    # standalone 直编其实现单元（纯数据操作/纯存储，零额外依赖，镜像
+    # COG_LLM_OPS_SRC 范式）。
+    set(COG_GCCP_TEST_SRCS "")
+    if(NOT TARGET airy_coreloopthree)
+        set(COG_GCCP_TEST_SRCS
+            "${COG_CONTRACT_DIR}/../src/cognition/gccp/gccp_goal.c"
+            "${COG_CONTRACT_DIR}/../src/ops/ops_injection.c")
+    endif()
+    add_executable(test_gccp_strategy tests/unit/test_gccp_strategy.c ${COG_GCCP_TEST_SRCS})
+    target_compile_definitions(test_gccp_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
+    if(_cog_cjson_libs)
+        target_compile_definitions(test_gccp_strategy PRIVATE AIRY_HAS_CJSON=1)
+    endif()
+    target_include_directories(test_gccp_strategy PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+        ${_cog_cjson_inc}
+    )
+    target_link_libraries(test_gccp_strategy PRIVATE airy_cognition_strategy)
+    if(TARGET airy_coreloopthree)
+        target_link_libraries(test_gccp_strategy PRIVATE airy_coreloopthree)
+    endif()
+    if(_cog_cjson_libs)
+        target_link_libraries(test_gccp_strategy PRIVATE ${_cog_cjson_libs})
+    endif()
+    if(NOT MSVC)
+        target_link_libraries(test_gccp_strategy PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_gccp_tests COMMAND test_gccp_strategy)
 endif()
 
 install(TARGETS airy_cognition_strategy
@@ -308,6 +346,6 @@ install(TARGETS airy_cognition_strategy
 )
 
 install(FILES include/dispatch_strategy.h include/plan_strategy.h include/coord_strategy.h
-    include/cog_review_strategy.h
+    include/cog_review_strategy.h include/gccp_strategy.h
     DESTINATION include/agentrt/cognition
 )
