@@ -13,7 +13,7 @@
  */
 
 #include "cognition.h"
-#include "planner/plan_strategy.h"
+#include "plan_strategy.h"
 #include "foundation/thinking_chain.h"
 #include "airy_memory.h"
 

@@ -133,12 +133,19 @@ elseif(CJSON_FOUND OR CJSON_LIBRARIES)
 endif()
 
 set(COGNITION_SOURCES
+    # 规划策略载荷族（0.1.19 M5-4 §262/§271，自 atoms/coreloopthree
+    # src/cognition/think/planner 迁入并归格 src/planner/；机制核仅留
+    # llm_client 机制件 + airy_plan_ops.h 契约 + are_ops_set/get_plan()
+    # 分发面，载荷经 payload_registry 注表装配）
+    src/planner/hierarchical.c
+    src/planner/ml_based.c
+    src/planner/ml_planner.c
+    src/planner/reactive.c
+    src/planner/reflective.c
+    src/planner/reflective_llm_plan.c
     src/weighted.c
     src/priority.c
     src/round_robin.c
-    src/ml_based.c
-    src/hierarchical.c
-    src/ml_planner.c
     src/coord_dual.c
     src/coord_majority.c
     src/coord_weighted.c
@@ -207,14 +214,45 @@ if(NOT TARGET airy_llm_ops)
     set(COG_LLM_OPS_SRC "${COG_CONTRACT_DIR}/../src/ops/llm_ops.c")
 endif()
 
+# 规划策略载荷支撑单元（0.1.19 M5-4 §271）：reactive/reflective 依赖
+# 机制核 llm_client（LLM 服务生命周期）与 llm_svc_adapter（IPC 通道，
+# adapter 三源互调 + are_ops_get_ipc）+ ops_injection（契约存储面）。
+# embedded 形态由 airy_cognition 目标提供；standalone 形态（未纳入
+# atoms）直编对应实现单元，使本库自包含。镜像 COG_LLM_OPS_SRC 范式。
+set(COG_PLAN_BASE_SRC "")
+if(NOT TARGET airy_cognition)
+    set(COG_PLAN_BASE_SRC
+        "${COG_CONTRACT_DIR}/../src/cognition/think/planner/llm_client.c"
+        "${COG_CONTRACT_DIR}/../src/cognition/think/adapter/llm_svc_adapter.c"
+        "${COG_CONTRACT_DIR}/../src/cognition/think/adapter/llm_svc_adapter_json.c"
+        "${COG_CONTRACT_DIR}/../src/cognition/think/adapter/llm_svc_adapter_stream.c"
+        # llm_svc_adapter 经 are_ops_get_ipc 消费 IPC 注表面；该机制存储件
+        # （零依赖）在 embedded 由 airy_coreloopthree 闭包承接，standalone
+        # 直编本体（镜像 ops_injection.c 范式，非桩）。
+        "${COG_CONTRACT_DIR}/../src/ops/ipc_ops.c"
+        "${COG_CONTRACT_DIR}/../src/ops/ops_injection.c")
+endif()
+
 add_library(airy_cognition_strategy STATIC
-    ${COGNITION_SOURCES} ${COGNITION_HEADERS} ${COG_LLM_OPS_SRC})
+    ${COGNITION_SOURCES} ${COGNITION_HEADERS} ${COG_LLM_OPS_SRC} ${COG_PLAN_BASE_SRC})
 
 target_include_directories(airy_cognition_strategy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation
     ${CMAKE_CURRENT_SOURCE_DIR}/src/intent
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/planner
+    # §271 迁入件消费机制核内部头（llm_client.h/llm_svc_adapter.h）；
+    # airy_cognition 的 think src include 为 PRIVATE 不传播，直编链须
+    # 显式解析；llm_svc_adapter.c 经 airy_ipc_ops.h 传递依赖
+    # daemon_rpc_client.h（commons/utils/ipc/）。
+    "${COG_CONTRACT_DIR}/../src/cognition/think"
+    "${COG_CONTRACT_DIR}/../src/cognition/think/planner"
+    "${COG_CONTRACT_DIR}/../src/cognition/think/adapter"
+    ${COG_COMMONS_DIR}/utils/ipc
+    # llm_svc_adapter.c 消费 airy_quality.h（E-1/E-3/E-6 质量宏）；
+    # embedded 由 atoms 库闭包解析，standalone 直编链须显式给出。
+    ${COG_COMMONS_DIR}/utils/quality
 )
 
 # 契约面 PUBLIC 传播：本库公共头含 include 的契约头裸名（dispatch_strategy.h
@@ -478,6 +516,40 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME cognition_intent_parser_tests COMMAND test_intent_parser)
 
+    # 规划策略载荷测试（双模式）：被测符号为 reactive/reflective 工厂与
+    # payload_registry plan 注表（0.1.19 M5-4 §271 自 atoms 迁入）；
+    # are_ops_get_plan 存储面在 embedded 由 airy_cognition（ops_injection）
+    # 承接，standalone 由本库 COG_PLAN_BASE_SRC 直编；计划数据模型
+    # （airy_task_plan_free，plan_model.c）在 embedded 由 airy_cognition
+    # 目标提供，standalone 直编其实现单元（镜像 COG_GRAD_TEST_SRCS 范式）；
+    # reactive 规则路径与 reflective fallback 计划均不依赖 LLM（llm 传
+    # NULL）。
+    set(COG_PLAN_TEST_SRCS "")
+    if(NOT TARGET airy_cognition)
+        set(COG_PLAN_TEST_SRCS
+            "${COG_CONTRACT_DIR}/../src/cognition/think/plan_model.c"
+            # standalone 机制接缝缺席态闭合单元：payload_registry 的 MC/TC
+            # 载荷 memory 槽位（tc_memory.c）引用机制接口符号，机制核缺席
+            # 形态下由本单元闭合（防御语义镜像 engine.c 判空早退，非桩）；
+            # embedded 由 airy_coreloopthree 真实现承接，不参与编译。
+            tests/standalone/mech_memory_absent.c)
+    endif()
+    add_executable(test_plan_reactive tests/unit/test_plan_reactive.c ${COG_PLAN_TEST_SRCS})
+    target_compile_definitions(test_plan_reactive PRIVATE AIRY_COMPLIANCE_IMPL)
+    target_include_directories(test_plan_reactive PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+    )
+    target_link_libraries(test_plan_reactive PRIVATE airy_cognition_strategy)
+    if(TARGET airy_coreloopthree)
+        target_link_libraries(test_plan_reactive PRIVATE airy_coreloopthree)
+    endif()
+    if(NOT MSVC)
+        target_link_libraries(test_plan_reactive PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_plan_reactive_tests COMMAND test_plan_reactive)
+
     # 认知进化策略载荷测试（双模式）：被测符号全部为 cog_evolution_*
     # 载荷 AIRY_API（0.1.19 M5-4 §270 自 atoms 迁入），零机制侧符号
     # 依赖，embedded/standalone 均仅链本库；契约头自足（仅 std 头）。
@@ -498,9 +570,9 @@ if(BUILD_TESTS)
     # airy_hook_*/airy_intent_parser_*/airy_plan_reactive_create）与 MC/TC
     # 载荷（airy_tc_working_memory_*），仅在 agentrt 超级构建（机制核
     # airy_coreloopthree 目标存在）时挂载；standalone 形态无机制核，不建。
-    # 机制公开头（cognition.h/memory.h）由 COG_CONTRACT_DIR 解析，机制侧
-    # 反思规划契约（planner/plan_strategy.h）由机制 think src 路径解析，
-    # 载荷内部头由 src、src/foundation 解析。airy_coreloopthree 的 PUBLIC
+    # 机制公开头（cognition.h/memory.h）由 COG_CONTRACT_DIR 解析，载荷
+    # 契约（plan_strategy.h）由本库 include 解析，载荷内部头由 src、
+    # src/foundation 解析。airy_coreloopthree 的 PUBLIC
     # 闭包已收口 atoms 域 + 零依赖 ops 归档（daemons 断链），无 svc 系
     # 传递依赖。
     if(TARGET airy_coreloopthree)
