@@ -173,6 +173,15 @@ set(COGNITION_SOURCES
     src/foundation/tc/tc_recovery.c
     src/foundation/tc/tc_step.c
     src/foundation/tc/tc_working_memory.c
+    # 意图解析策略载荷（0.1.19 M5-4 §269，自 atoms/coreloopthree
+    # src/cognition/think/intent 迁入；机制核仅留 intent.h 契约 +
+    # are_ops_set/get_intent() 分发面，sc Phase0 缺席 ENOSYS 中断）
+    src/intent/intent_parser.c
+    src/intent/intent_rule_engine.c
+    src/intent/intent_entity_extractor.c
+    src/intent/intent_parser_ops.c
+    src/intent/intent_classifier.c
+    src/intent/entity_extractor.c
     src/payload_registry.c
 )
 set(COGNITION_HEADERS
@@ -199,6 +208,7 @@ add_library(airy_cognition_strategy STATIC
 target_include_directories(airy_cognition_strategy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/intent
 )
 
 # 契约面 PUBLIC 传播：本库公共头含 include 的契约头裸名（dispatch_strategy.h
@@ -232,6 +242,14 @@ endif()
 
 if(TARGET airy_llm_ops)
     target_link_libraries(airy_cognition_strategy PUBLIC airy_llm_ops)
+endif()
+
+# 意图解析载荷（intent_parser.c，0.1.19 M5-4 §269 迁入）保留机制侧支撑
+# 符号依赖（airy_generate_uuid/airy_gccp_goal_free）；embedded 经 PRIVATE
+# 链承接（静态库 LINK_ONLY 传播至最终链接），standalone 无机制核，测试
+# 目标直编对应实现单元（镜像 COG_GCCP_TEST_SRCS 范式）。
+if(TARGET airy_coreloopthree)
+    target_link_libraries(airy_cognition_strategy PRIVATE airy_coreloopthree)
 endif()
 
 # cJSON：cog_review 汇总决策 JSON（embedded/standalone 一致）
@@ -424,6 +442,35 @@ if(BUILD_TESTS)
         target_link_libraries(test_metacognition_calibration PRIVATE pthread dl m)
     endif()
     add_test(NAME cognition_mc_calibration_tests COMMAND test_metacognition_calibration)
+
+    # 意图解析策略载荷测试（双模式）：被测符号全部为 cognition.h 公开
+    # API（airy_intent_parser_*，0.1.19 M5-4 §269 自 atoms 迁入）；
+    # 载荷机制侧符号依赖（id_utils/gccp_goal）在 embedded 由
+    # airy_coreloopthree 承接，standalone 直编其实现单元（镜像
+    # COG_GCCP_TEST_SRCS 范式）；零载荷内部头依赖，契约头由
+    # COG_CONTRACT_DIR 解析。
+    set(COG_INTENT_TEST_SRCS "")
+    if(NOT TARGET airy_coreloopthree)
+        set(COG_INTENT_TEST_SRCS
+            "${COG_CONTRACT_DIR}/../src/utils/id_utils.c"
+            "${COG_CONTRACT_DIR}/../src/cognition/gccp/gccp_goal.c")
+    endif()
+    add_executable(test_intent_parser tests/unit/test_intent_parser.c ${COG_INTENT_TEST_SRCS})
+    target_compile_definitions(test_intent_parser PRIVATE AIRY_COMPLIANCE_IMPL)
+    target_include_directories(test_intent_parser PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+        ${COG_COMMONS_DIR}/utils/uuid
+    )
+    target_link_libraries(test_intent_parser PRIVATE airy_cognition_strategy)
+    if(TARGET airy_coreloopthree)
+        target_link_libraries(test_intent_parser PRIVATE airy_coreloopthree)
+    endif()
+    if(NOT MSVC)
+        target_link_libraries(test_intent_parser PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_intent_parser_tests COMMAND test_intent_parser)
 
     # 机制核集成测试（embedded-only）：被测符号横跨机制核（airy_cognition_*/
     # airy_hook_*/airy_intent_parser_*/airy_plan_reactive_create）与 MC/TC
