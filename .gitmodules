@@ -1,6 +1,6 @@
 [submodule "memoryrovol"]
         path = memoryrovol
-        url = https://atomgit.com/openairymax/memoryrovol.git
+        url = git@atomgit.com:openairymax/memoryrovol.git
         branch = dev/hubs-01
         update = none
 [submodule "cupolas"]
