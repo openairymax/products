@@ -16,7 +16,6 @@
  */
 
 #include "cognition.h"
-#include "memory.h"
 #include "airy_memory.h"
 #include "error.h"
 #include "metacognition.h"

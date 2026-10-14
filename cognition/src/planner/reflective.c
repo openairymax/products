@@ -145,7 +145,6 @@ static airy_err_t reflective_plan_init(void **out_context)
     ctx->chain = NULL;
     ctx->meta = NULL;
     ctx->llm = NULL;
-    ctx->memory_engine = NULL;
     ctx->initialized = 0;
     ctx->session_count = 0;
     ctx->last_goal = NULL;
@@ -441,18 +440,15 @@ static airy_err_t reflective_plan(const airy_intent_t *intent, void *context,
  * (dead code) and has been deleted.
  *
  * Usage (like airy_plan_reactive_create):
- *   airy_plan_strategy_t *strat = airy_plan_reflective_create(llm, memory_engine);
+ *   airy_plan_strategy_t *strat = airy_plan_reflective_create(llm);
  *   airy_cognition_set_plan_strategy(cognition, strat);
  *
  * Params:
  *   llm - LLM service client handle (for S2 content generation)
- *   memory_engine - memory engine handle (for historical experience;
- *   0.1.1 does not deeply integrate yet, only stores)
  *
  * Returns:
  *   strategy object pointer, or NULL on failure */
-airy_plan_strategy_t *airy_plan_reflective_create(airy_llm_service_t *llm,
-                                                  airy_memory_engine_t *memory_engine)
+airy_plan_strategy_t *airy_plan_reflective_create(airy_llm_service_t *llm)
 {
     airy_plan_strategy_t *strat =
         (airy_plan_strategy_t *)AIRY_CALLOC(1, sizeof(airy_plan_strategy_t));
@@ -467,13 +463,11 @@ airy_plan_strategy_t *airy_plan_reflective_create(airy_llm_service_t *llm,
     }
 
     ctx->llm = llm;
-    ctx->memory_engine = memory_engine;
 
     strat->plan = reflective_plan;
     strat->destroy = reflective_plan_cleanup;
     strat->data = ctx;
 
-    AIRY_LOG_INFO("reflective: strategy created (llm=%p, memory_engine=%p)", (void *)llm,
-             (void *)memory_engine);
+    AIRY_LOG_INFO("reflective: strategy created (llm=%p)", (void *)llm);
     return strat;
 }

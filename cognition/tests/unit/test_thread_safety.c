@@ -47,7 +47,7 @@ static airy_plan_strategy_t *new_primary_strat(void)
 
 airy_plan_strategy_t *attach_fallback(airy_cognition_engine_t *engine)
 {
-    airy_plan_strategy_t *fallback = airy_plan_reflective_create(NULL, NULL);
+    airy_plan_strategy_t *fallback = airy_plan_reflective_create(NULL);
     assert(fallback != NULL);
     airy_cognition_set_fallback_plan(engine, fallback);
     return fallback;
@@ -461,7 +461,6 @@ int main(int argc, char *argv[])
     RUN_TEST(int02_2_error_code_propagation);
     RUN_TEST(int02_2_create_ex_error_handling);
     RUN_TEST(int02_2_intent_parser_error_handling);
-    RUN_TEST(int02_2_memory_engine_error_handling);
 
     printf("\n=========================================\n");
     printf("  All thread safety tests PASSED\n");

@@ -123,7 +123,7 @@ static void test_plan_payload_zh_smoke(void)
 
 static void test_plan_reflective_no_llm_fallback(void)
 {
-    airy_plan_strategy_t *strat = airy_plan_reflective_create(NULL, NULL);
+    airy_plan_strategy_t *strat = airy_plan_reflective_create(NULL);
     if (!strat || !strat->plan) {
         FAIL("plan_reflective_no_llm_fallback", "factory failed");
         return;

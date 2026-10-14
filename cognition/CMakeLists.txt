@@ -527,12 +527,7 @@ if(BUILD_TESTS)
     set(COG_PLAN_TEST_SRCS "")
     if(NOT TARGET airy_cognition)
         set(COG_PLAN_TEST_SRCS
-            "${COG_CONTRACT_DIR}/../src/cognition/think/plan_model.c"
-            # standalone 机制接缝缺席态闭合单元：payload_registry 的 MC/TC
-            # 载荷 memory 槽位（tc_memory.c）引用机制接口符号，机制核缺席
-            # 形态下由本单元闭合（防御语义镜像 engine.c 判空早退，非桩）；
-            # embedded 由 airy_coreloopthree 真实现承接，不参与编译。
-            tests/standalone/mech_memory_absent.c)
+            "${COG_CONTRACT_DIR}/../src/cognition/think/plan_model.c")
     endif()
     add_executable(test_plan_reactive tests/unit/test_plan_reactive.c ${COG_PLAN_TEST_SRCS})
     target_compile_definitions(test_plan_reactive PRIVATE AIRY_COMPLIANCE_IMPL)

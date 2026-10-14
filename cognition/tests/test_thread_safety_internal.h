@@ -15,7 +15,6 @@
 #define TEST_THREAD_SAFETY_INTERNAL_H
 
 #include "cognition.h"
-#include "memory.h"
 #include "airy_memory.h"
 /* d8 清理：移除 sync_compat.h。本文件使用 airy_mtx_t + airy_mtx_* 函数（platform.h API），
  * 通过 airy_memory.h → error.h → types.h → platform.h 间接获得，无需 sync_compat.h。 */
@@ -99,6 +98,6 @@ void test_int02_2_null_engine_handling(void);
 void test_int02_2_error_code_propagation(void);
 void test_int02_2_create_ex_error_handling(void);
 void test_int02_2_intent_parser_error_handling(void);
-void test_int02_2_memory_engine_error_handling(void);
+
 
 #endif /* TEST_THREAD_SAFETY_INTERNAL_H */

@@ -61,11 +61,9 @@ airy_plan_strategy_t *airy_plan_reactive_create(airy_llm_service_t *llm);
 /**
  * @brief Create a reflective replanning strategy (5-stage pipeline).
  * @param llm LLM service handle (NULL builds keyword fallback plans)
- * @param memory_engine Memory engine for historical-experience lookup
  * @return Strategy object, or NULL on failure
  */
-airy_plan_strategy_t *airy_plan_reflective_create(airy_llm_service_t *llm,
-                                                  airy_memory_engine_t *memory_engine);
+airy_plan_strategy_t *airy_plan_reflective_create(airy_llm_service_t *llm);
 
 #ifdef __cplusplus
 }

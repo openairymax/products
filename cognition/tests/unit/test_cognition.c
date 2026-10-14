@@ -8,7 +8,6 @@
 
 #include "payload_registry.h"
 #include "cognition.h"
-#include "memory.h"
 #include "airy_memory.h"
 
 #include <assert.h>

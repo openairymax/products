@@ -31,7 +31,6 @@ typedef struct {
     airy_thinking_chain_t *chain;
     airy_metacognition_t *meta;
     airy_llm_service_t *llm;
-    airy_memory_engine_t *memory_engine;
     int initialized;
     uint64_t session_count;
     char *last_goal;
