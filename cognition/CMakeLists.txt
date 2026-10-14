@@ -138,32 +138,38 @@ set(COGNITION_SOURCES
     # llm_client 机制件 + airy_plan_ops.h 契约 + are_ops_set/get_plan()
     # 分发面，载荷经 payload_registry 注表装配）
     src/planner/hierarchical.c
-    src/planner/ml_based.c
     src/planner/ml_planner.c
     src/planner/reactive.c
     src/planner/reflective.c
     src/planner/reflective_llm_plan.c
-    src/weighted.c
-    src/priority.c
-    src/round_robin.c
-    src/coord_dual.c
-    src/coord_majority.c
-    src/coord_weighted.c
-    src/coord_arbiter.c
-    src/coord_adapter.c
-    src/cog_review.c
-    src/gccp.c
-    src/gccp_llm_json.c
-    src/gccp_heuristic.c
+    # 子 agent 分发策略族（0.1.19 M5-4 §261，归格 src/dispatcher/）。
+    # ml_based 与 weighted/priority/round_robin 同为 airy_dispatching_*
+    # 契约实现，自规划族归位本族（其机制为分派而非规划）。
+    src/dispatcher/weighted.c
+    src/dispatcher/priority.c
+    src/dispatcher/round_robin.c
+    src/dispatcher/ml_based.c
+    # 协调策略族（双轨 / 仲裁 / 加权 / 适配），归格 src/coordinator/
+    src/coordinator/coord_dual.c
+    src/coordinator/coord_majority.c
+    src/coordinator/coord_weighted.c
+    src/coordinator/coord_arbiter.c
+    src/coordinator/coord_adapter.c
+    # 认知并行审查（CPR）策略族，归格 src/review/
+    src/review/cog_review.c
+    # GCCP 候选剪枝启发式族，归格 src/gccp/
+    src/gccp/gccp.c
+    src/gccp/gccp_llm_json.c
+    src/gccp/gccp_heuristic.c
     # GRAD 计划级批判环策略载荷（0.1.19 M5-4 §267，自 atoms/coreloopthree
     # src/cognition/grad 迁入；机制核仅留 grad.h 契约 + 机制面分发）
-    src/grad_verifier.c
-    src/grad_coordinator.c
-    src/grad_llm_ws.c
-    src/grad_llm_call.c
-    src/grad_llm_s2_plan.c
-    src/grad_llm_s1_arbiter.c
-    src/grad_run.c
+    src/grad/grad_verifier.c
+    src/grad/grad_coordinator.c
+    src/grad/grad_llm_ws.c
+    src/grad/grad_llm_call.c
+    src/grad/grad_llm_s2_plan.c
+    src/grad/grad_llm_s1_arbiter.c
+    src/grad/grad_run.c
     # MC/TC 认知基座策略载荷（0.1.19 M5-4 §268，自 atoms/coreloopthree
     # src/cognition/think/foundation 迁入；机制核仅留 tc.h/mc.h 契约 +
     # ops 注入表，daemon 侧经 payload_registry 注表）
@@ -242,6 +248,13 @@ target_include_directories(airy_cognition_strategy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/intent
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ext
     ${CMAKE_CURRENT_SOURCE_DIR}/src/planner
+    # 策略族子目录：族内私有头（*_internal.h）以裸名被同族源件 #include，
+    # 归格后须显式解析（镜像 foundation/intent/planner 范式）。
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/dispatcher
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/coordinator
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/review
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/gccp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/grad
     # §271 迁入件消费机制核内部头（llm_client.h/llm_svc_adapter.h）；
     # airy_cognition 的 think src include 为 PRIVATE 不传播，直编链须
     # 显式解析；llm_svc_adapter.c 经 airy_ipc_ops.h 传递依赖
@@ -382,6 +395,7 @@ if(BUILD_TESTS)
     target_include_directories(test_cog_review_strategy PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/review
         ${COG_CONTRACT_DIR}
         ${AIRY_COREKERN_INCLUDE_DIR}
         ${_cog_cjson_inc}
@@ -452,6 +466,7 @@ if(BUILD_TESTS)
     target_include_directories(test_grad_strategy PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/grad
         ${COG_CONTRACT_DIR}
         ${AIRY_COREKERN_INCLUDE_DIR}
         ${_cog_cjson_inc}
