@@ -67,18 +67,19 @@ cognition/
 │   ├── gccp_strategy.h         #   启发式评分
 │   ├── cognitive_evolution.h   #   演化扩展
 │   └── payload_registry.h      #   载荷注册表
-├── src/
-│   ├── cog_review.c            # CPR：并行审查 worker + 投票合并
-│   ├── coord_*.c               # 协调适配 / 仲裁 / 双轨
-│   ├── grad_*.c                # GRAD 规划 / 校验 / LLM 调用
-│   ├── weighted.c / round_robin.c / priority.c / ml_*.c   # 分发四件
+├── src/                        # 策略载荷，按能力族（capability family）分组
+│   ├── planner/                # 反应式 / 分层 / 反思 / ML 规划
+│   ├── dispatcher/             # 子 agent 分发：加权 / 轮询 / 优先 / ML
+│   ├── coordinator/            # 双轨协调、仲裁、适配
+│   ├── review/                 # CPR：并行审查 worker + 投票合并
+│   ├── gccp/                   # 候选剪枝启发式评分
+│   ├── grad/                   # GRAD 规划 / 校验 / 分阶段 LLM 调用
 │   ├── intent/                 # 意图分类、实体抽取、规则引擎
-│   ├── planner/                # reactive / hierarchical / reflective / ML
 │   ├── foundation/             # 元认知 + 思维链（mc / tc）
-│   └── ext/cognitive_evolution.c
+│   ├── ext/                    # 认知进化
+│   └── payload_registry.c      # 跨族载荷注册（装配入口）
 └── tests/
-    ├── unit/                   # 单元测试（策略、GRAD、线程、e2e）
-    └── standalone/             # standalone 模式入口
+    └── unit/                   # 单元测试（策略、GRAD、线程、e2e）
 ```
 
 ## 并发与安全

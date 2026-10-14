@@ -76,18 +76,19 @@ cognition/
 │   ├── gccp_strategy.h         #   Heuristic scoring
 │   ├── cognitive_evolution.h   #   Evolution extension
 │   └── payload_registry.h      #   Payload registry
-├── src/
-│   ├── cog_review.c            # CPR: parallel review workers + vote merge
-│   ├── coord_*.c               # Coordination adapter / arbiter / dual
-│   ├── grad_*.c                # GRAD plan / verify / LLM calls
-│   ├── weighted.c / round_robin.c / priority.c / ml_*.c   # Dispatch set
-│   ├── intent/                 # Intent classifier, entity extractor, rules
-│   ├── planner/                # reactive / hierarchical / reflective / ML
+├── src/                        # Strategy payloads grouped by capability family
+│   ├── planner/                # reactive / hierarchical / reflective / ML planning
+│   ├── dispatcher/             # sub-agent dispatch: weighted / round-robin / priority / ML
+│   ├── coordinator/            # dual-track coordination, arbitration, adapter
+│   ├── review/                 # CPR: parallel review workers + vote merge
+│   ├── gccp/                   # heuristic scoring for candidate pruning
+│   ├── grad/                   # GRAD plan / verify / staged LLM calls
+│   ├── intent/                 # intent classifier, entity extractor, rules
 │   ├── foundation/             # metacognition + thinking chain (mc / tc)
-│   └── ext/cognitive_evolution.c
+│   ├── ext/                    # cognitive evolution
+│   └── payload_registry.c      # cross-family payload registration (assembly entry)
 └── tests/
-    ├── unit/                   # unit tests (strategies, GRAD, threads, e2e)
-    └── standalone/             # Standalone-mode entry
+    └── unit/                   # unit tests (strategies, GRAD, threads, e2e)
 ```
 
 ## Concurrency & Safety
