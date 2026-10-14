@@ -3,23 +3,37 @@
 
 /**
  * @file tc_memory.c
- * @brief Thinking-chain memory integration domain: seven MemoryRovol connection points.
+ * @brief Thinking-chain memory integration domain: provider single-track.
+ *
+ * 0.1.19 C3：记忆双栈塌缩后，思考链长期记忆统一经 memory provider vtable
+ * （registry 活跃件，生产态为 memrpc→mem_d）。写侧以 write_raw + JSON
+ * metadata 承载重要性/来源/追踪字段；读侧 query + get_raw 组合还原
+ * prepopulate 所需的记录内容。
  */
 
 #include "tc_internal.h"
 
-/* ============================================================================
- * P2-B03: MemoryRovol integration - 7 connection points
- * ============================================================================ */
-
-#include "memory.h"
+#include "provider.h"
 #include "metacognition.h"
 
-void airy_tc_chain_set_memory(airy_thinking_chain_t *chain, airy_memory_engine_t *memory)
+void airy_tc_chain_set_memory(airy_thinking_chain_t *chain, airy_memory_provider_t *memory)
 {
     if (!chain)
         return;
     chain->memory = memory;
+}
+
+/* provider 写路径单源：组装 metadata JSON 后落 write_raw，record_id 由
+ * 调用方释放。importance/source/trace 三元组是各接入点唯一的差异字段。 */
+static airy_err_t chain_mem_write(airy_memory_provider_t *provider, const void *data, size_t len,
+                                  float importance, const char *source, const char *trace,
+                                  char **out_record_id)
+{
+    char meta_json[256];
+    snprintf(meta_json, sizeof(meta_json),
+             "{\"type\":\"text\",\"importance\":%.3f,\"source\":\"%s\",\"trace_id\":\"%s\"}",
+             importance, source ? source : "unknown", trace ? trace : "");
+    return provider->write_raw(provider, data, len, meta_json, out_record_id);
 }
 
 airy_err_t airy_tc_context_window_prepop(airy_thinking_chain_t *chain, const char *query_text,
@@ -34,50 +48,49 @@ airy_err_t airy_tc_context_window_prepop(airy_thinking_chain_t *chain, const cha
         return AIRY_EINVAL;
     }
 
-    airy_memory_query_t query;
-    __builtin_memset(&query, 0, sizeof(query));
-    query.memory_query_text = (char *)query_text;
-    query.memory_query_text_len = query_len;
-    query.memory_query_limit = limit > 0 ? limit : 5;
-    /* P3.11-C1: the query must fill memory_result_item_record (including
-     * record content), otherwise prepopulate gets no rec->memory_record_data
-     * and memory content cannot be injected into the context window. */
-    query.memory_query_include_raw = 1;
-
-    airy_memory_result_ext_t *result = NULL;
-    airy_err_t err = airy_memory_query(chain->memory, &query, &result);
-    if (err != AIRY_SUCCESS || !result || result->memory_result_count == 0) {
+    uint32_t want = limit > 0 ? limit : 5;
+    char **ids = NULL;
+    float *scores = NULL;
+    size_t count = 0;
+    airy_err_t err = chain->memory->query(chain->memory, query_text, want, &ids, &scores, &count);
+    if (err != AIRY_SUCCESS || count == 0) {
         AIRY_LOG_WARN("airy_tc_context_window_prepop: memory query failed or empty (err=%d "
-                      "result=%p count=%zu)",
-                      (int)err, (void *)result, result ? result->memory_result_count : 0);
-        if (result)
-            airy_memory_result_free(result);
+                      "count=%zu)",
+                      (int)err, count);
+        airy_memory_provider_free_query_results(ids, scores, count);
         return err == AIRY_SUCCESS ? AIRY_ENOENT : err;
     }
 
-    for (size_t i = 0; i < result->memory_result_count; i++) {
-        airy_memory_record_t *rec = result->memory_result_items[i]->memory_result_item_record;
-        if (!rec || !rec->memory_record_data)
+    for (size_t i = 0; i < count; i++) {
+        if (!ids[i])
             continue;
+        void *raw = NULL;
+        size_t raw_len = 0;
+        if (chain->memory->get_raw(chain->memory, ids[i], &raw, &raw_len) != AIRY_SUCCESS ||
+            !raw || raw_len == 0) {
+            continue;
+        }
 
         char prefix[128];
-        int plen = snprintf(prefix, sizeof(prefix), "[Memory#%zu score=%.2f] ", i,
-                            result->memory_result_items[i]->memory_result_item_score);
+        int plen = snprintf(prefix, sizeof(prefix), "[Memory#%zu score=%.2f] ", i, scores[i]);
 
-        size_t total_len = (size_t)plen + rec->memory_record_data_len + 1;
+        size_t total_len = (size_t)plen + raw_len + 1;
         char *buf = (char *)AIRY_MALLOC(total_len);
-        if (!buf)
+        if (!buf) {
+            AIRY_FREE(raw);
             continue;
+        }
 
         __builtin_memcpy(buf, prefix, (size_t)plen);
-        __builtin_memcpy(buf + plen, rec->memory_record_data, rec->memory_record_data_len);
+        __builtin_memcpy(buf + plen, raw, raw_len);
         buf[total_len - 1] = '\n';
 
         airy_tc_context_window_append(chain->ctx_window, buf, total_len);
         AIRY_FREE(buf);
+        AIRY_FREE(raw);
     }
 
-    airy_memory_result_free(result);
+    airy_memory_provider_free_query_results(ids, scores, count);
     return AIRY_SUCCESS;
 }
 
@@ -98,21 +111,13 @@ airy_err_t airy_tc_working_memory_sync_to_persistent(airy_thinking_chain_t *chai
     for (size_t i = 0; i < chain->working_mem->count; i++) {
         struct wm_entry *e = &chain->working_mem->entries[i];
         if (e->pinned && e->value && e->value_size > 0) {
-            airy_memory_record_t rec;
-            __builtin_memset(&rec, 0, sizeof(rec));
-            rec.memory_record_type = AIRY_MEMTYPE_TEXT;
-            rec.memory_record_data = e->value;
-            rec.memory_record_data_len = e->value_size;
-            rec.memory_record_importance = min_importance > 0.5f ? 0.8f : 0.6f;
-            rec.memory_record_source_agent = "thinking_chain_wm";
-            rec.memory_record_trace_id = chain->session_goal ? chain->session_goal : "unknown";
-
             char *record_id = NULL;
-            airy_err_t err = airy_memory_write(chain->memory, &rec, &record_id);
+            airy_err_t err = chain_mem_write(
+                chain->memory, e->value, e->value_size, min_importance > 0.5f ? 0.8f : 0.6f,
+                "thinking_chain_wm", chain->session_goal, &record_id);
             if (err == AIRY_SUCCESS && record_id) {
                 synced++;
                 AIRY_FREE(record_id);
-                record_id = NULL;
             }
         }
     }
@@ -140,23 +145,18 @@ airy_err_t airy_tc_step_write_to_memory(airy_thinking_chain_t *chain, airy_think
         return AIRY_EINVAL;
     }
 
-    airy_memory_record_t rec;
-    __builtin_memset(&rec, 0, sizeof(rec));
-    rec.memory_record_type = AIRY_MEMTYPE_TEXT;
-    rec.memory_record_data = step->content;
-    rec.memory_record_data_len = step->content_len;
-    rec.memory_record_importance = step->confidence;
-    rec.memory_record_source_agent = step->role ? step->role : "t2-generator";
-    rec.memory_record_access_count = (uint32_t)(step->correction_count + 1);
-
     char trace_id[64];
     snprintf(trace_id, sizeof(trace_id), "step_%u", step->step_id);
-    rec.memory_record_trace_id = trace_id;
 
     char *record_id = NULL;
-    airy_err_t err = airy_memory_write(chain->memory, &rec, &record_id);
-    if (err == AIRY_SUCCESS && record_id && chain->memory) {
-        airy_memory_mount(chain->memory, record_id, chain->session_goal ? chain->session_goal : "");
+    airy_err_t err = chain_mem_write(chain->memory, step->content, step->content_len,
+                                     step->confidence, step->role ? step->role : "t2-generator",
+                                     trace_id, &record_id);
+    if (err == AIRY_SUCCESS && record_id) {
+        if (chain->memory->mount) {
+            chain->memory->mount(chain->memory, record_id,
+                                 chain->session_goal ? chain->session_goal : "");
+        }
         AIRY_FREE(record_id);
     }
 
@@ -186,20 +186,12 @@ airy_err_t airy_tc_meta_inform_mem(airy_thinking_chain_t *chain, const void *eva
         importance = 0.5f;
 
     if (eval_typed->critique_text && eval_typed->critique_len > 0) {
-        airy_memory_record_t rec;
-        __builtin_memset(&rec, 0, sizeof(rec));
-        rec.memory_record_type = AIRY_MEMTYPE_TEXT;
-        rec.memory_record_data = (void *)eval_typed->critique_text;
-        rec.memory_record_data_len = eval_typed->critique_len;
-        rec.memory_record_importance = importance;
-        rec.memory_record_source_agent = "s1-metacognition";
-        rec.memory_record_trace_id = chain->session_goal ? chain->session_goal : "";
-
         char *record_id = NULL;
-        airy_err_t err = airy_memory_write(chain->memory, &rec, &record_id);
+        airy_err_t err = chain_mem_write(chain->memory, eval_typed->critique_text,
+                                         eval_typed->critique_len, importance, "s1-metacognition",
+                                         chain->session_goal, &record_id);
         if (err == AIRY_SUCCESS && record_id) {
             AIRY_FREE(record_id);
-            record_id = NULL;
         }
     }
 

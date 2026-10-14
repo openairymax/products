@@ -54,9 +54,9 @@ void test_int02_2_null_engine_handling(void)
     airy_cognition_set_context_take(NULL, NULL, NULL);
     printf("    set_context(NULL, NULL, NULL) → no crash\n");
 
-    /* 4. airy_cognition_set_memory(NULL, NULL) */
-    airy_cognition_set_memory(NULL, NULL);
-    printf("    set_memory(NULL, NULL) → no crash\n");
+    /* 4. airy_cognition_set_memory_provider(NULL, NULL) */
+    airy_cognition_set_memory_provider(NULL, NULL);
+    printf("    set_memory_provider(NULL, NULL) → no crash\n");
 
     airy_err_t err = airy_cognition_stats(NULL, NULL, NULL);
     assert(err != AIRY_SUCCESS);
@@ -172,25 +172,3 @@ void test_int02_2_intent_parser_error_handling(void)
     airy_intent_parser_destroy(parser);
 }
 
-void test_int02_2_memory_engine_error_handling(void)
-{
-    printf("    Testing memory engine error handling...\n");
-
-    airy_err_t err = airy_memory_create(NULL, NULL);
-    assert(err != AIRY_SUCCESS);
-    printf("    memory_create(NULL out_engine) → err=%s\n", error_str(err));
-
-    airy_memory_destroy(NULL);
-    printf("    memory_destroy(NULL) → no crash\n");
-
-    airy_memory_engine_t *mem = NULL;
-    err = airy_memory_create(NULL, &mem);
-    assert(err == AIRY_SUCCESS);
-    assert(mem != NULL);
-
-    err = airy_memory_write(mem, NULL, NULL);
-    assert(err != AIRY_SUCCESS);
-    printf("    memory_write(NULL record) → err=%s\n", error_str(err));
-
-    airy_memory_destroy(mem);
-}

@@ -138,7 +138,7 @@ struct airy_thinking_chain {
     char *session_goal;
     airy_context_window_t *ctx_window; /**< Context Window */
     airy_working_memory_t *working_mem; /**< Working Memory */
-    airy_memory_engine_t *memory;
+    airy_memory_provider_t *memory;     /**< Active memory provider (BORROW) */
 
 
     airy_thinking_step_t **steps; /**< step pointer array (each step is allocated
@@ -351,7 +351,7 @@ AIRY_API void airy_tc_chain_set_step_callback(
     void (*on_correction)(airy_thinking_step_t *, const char *, void *), void *user_data);
 
 
-AIRY_API void airy_tc_chain_set_memory(airy_thinking_chain_t *chain, airy_memory_engine_t *memory);
+AIRY_API void airy_tc_chain_set_memory(airy_thinking_chain_t *chain, airy_memory_provider_t *memory);
 
 AIRY_API airy_err_t airy_tc_context_window_prepop(airy_thinking_chain_t *chain,
                                                   const char *query_text, size_t query_len,
