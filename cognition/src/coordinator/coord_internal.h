@@ -5,7 +5,7 @@
  * @file coord_internal.h
  * @brief 协调策略内部共享契约（协调策略载荷私有）。
  *
- * 仅在 products/cognition/src/coord_*.c 之间共享：协调上下文与协调器基类
+ * 仅在 products/cognition/src/coordinator/coord_*.c 之间共享：协调上下文与协调器基类
  * 的"继承"语义，以及各具象协调器的基类构造器声明。公共策略工厂契约见
  * include/coord_strategy.h；机制核 atoms/coreloopthree/include/cognition.h
  * 仅提供 airy_coordinator_strategy_t 对象契约。
