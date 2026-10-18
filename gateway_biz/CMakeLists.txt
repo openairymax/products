@@ -63,6 +63,7 @@ target_include_directories(airy_gateway_biz PUBLIC
     ${_rt}/daemons/common/include
     # gateway_biz_internal.h 传递包含 gateway_mcp_server.h；
     # 协议适配实现待 0.2.x 下沉 protocols/core 后解除此依赖。
+    ${_rt}/daemons/gateway_d/include
     ${_rt}/daemons/gateway_d/src/protocol
     ${_rt}/commons
     ${_rt}/commons/include
