@@ -25,3 +25,6 @@
 !lang_gateway/**
 !cognition
 !cognition/**
+# 0.1.19 刀H：gateway_d 业务面迁出 agentrt/gateway/src/biz
+!gateway_biz
+!gateway_biz/**
