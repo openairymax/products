@@ -1,8 +1,9 @@
-# Airymax 产品层 — 策略模块聚合
+# Airymax 产品层 — 产品件聚合
 
-> Airymax AI 智能体运行时平台的**策略模块聚合仓**。将平台中承载「策略」的模块
-> —— 商业 MemoryRovol 记忆提供者、`cupolas` 安全穹顶、推理语言网关、`cognition`
-> 认知策略载荷 —— 汇集于统一的管理面之下，使策略载荷与机制核保持物理分离。
+> Airymax AI 智能体运行时平台的**产品件聚合仓**。将平台中承载「策略」与「业务
+> 形态面」的模块 —— 商业 MemoryRovol 记忆提供者、`cupolas` 安全穹顶、推理语言
+> 网关、`cognition` 认知策略载荷、`gateway_biz` 网关业务处理面 —— 汇集于统一
+> 的管理面之下，使策略载荷与机制核保持物理分离。
 
 **语言:** [English](README.md) | 简体中文
 
@@ -12,9 +13,9 @@
 
 ## 概述
 
-**Products 管理仓**（`products/`）是 Airymax 平台的**策略模块聚合路径**。它聚合
-承载*策略*的模块 —— 由 AgentRT 机制核加载或分派的可替换、策略形态的载荷 —— 并
-使其与机制核保持物理分离：
+**Products 管理仓**（`products/`）是 Airymax 平台的**产品件聚合路径**。它聚合
+承载*策略*与*业务形态面*的模块 —— 由 AgentRT 机制核加载、分派或装配的
+可替换载荷 —— 并使其与机制核保持物理分离：
 
 - **memoryrovol** —— 商业 L3/L4 记忆提供者（闭源）。
 - **cupolas** —— 安全穹顶：沙箱隔离、RBAC/ABAC 权限裁决、输入净化、审计追踪，
@@ -23,6 +24,8 @@
   模型路由、System Prompt 语言约束、输出后处理）。
 - **cognition** —— 认知策略载荷：分发、规划、协调、审查、意图策略，由 daemon
   启动期注入。
+- **gateway_biz** —— 网关业务处理面：统一能力派发、命名空间转发、协议后端、
+   PEP 裁定缓存，嵌入式装配进 `gateway_d`。
 
 本仓遵循平台的**机制 / 策略分离**原则：机制核位于
 [`agentrt/`](../agentrt)（atoms · commons · daemons · gateway · heapstore ·
@@ -30,12 +33,14 @@ protocols · tools），而策略形态的模块位于本仓，并通过稳定�
 弱符号桥、submodule 固定）接入。策略模块可被替换、升级或移除而不触碰内核；内核
 保留内置回退，在策略模块缺席时仍保持可用。
 
-与 [`sdk/`](../sdk) —— 纯叶子聚合 —— 不同，`products/` 有意混合两种聚合形态：
+与 [`sdk/`](../sdk) —— 纯叶子聚合 —— 不同，`products/` 有意混合三种聚合形态：
 
 - **submodule 叶子**（`memoryrovol`、`cupolas`）—— 各自是独立仓库，固定到精确
   commit。
-- **直接追踪模块**（`lang_gateway`、`cognition`）—— 源码由本仓自身管理的模块，
-  暂无独立叶子仓。
+- **直接追踪的策略模块**（`lang_gateway`、`cognition`）—— 源码由本仓自身管理
+  的模块，暂无独立叶子仓。
+- **直接追踪的嵌入式产品件**（`gateway_biz`）—— 仅由 `gateway_d` 在构建期
+  装配，缺席时该 daemon 不挂载，不产生桩实现。
 
 ## 仓库结构
 
@@ -49,6 +54,8 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
 │                               #   推理语言网关（厂商面）
 ├── cognition/                  # 直接追踪的策略模块（暂无独立叶子仓）
 │                               #   认知策略载荷（分发 · 规划 · …）
+├── gateway_biz/                # 直接追踪的嵌入式产品件（仅 gateway_d 装配）
+│                               #   网关业务处理面（派发 · 转发 · PEP 缓存）
 ├── .gitmodules                 # submodule 配置（2 个条目）
 ├── .gitignore                  # 白名单：文件 + submodule 挂点
 ├── LICENSE                     # AGPL v3 + Apache 2.0（仅限管理仓本身）
@@ -65,9 +72,10 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
 | **cupolas** | submodule | `cupolas/` | AGPL v3 + Apache 2.0 | 应用语义安全层：四层内生安全 + 动态策略引擎（策略决策点 PDP）。 |
 | **lang_gateway** | 直接追踪 | `lang_gateway/` | AGPL v3 + Apache 2.0 | 推理语言网关（`airy_lang_gateway`）—— 将自然语言输入标准化并路由至合适的模型。 |
 | **cognition** | 直接追踪 | `cognition/` | AGPL v3 + Apache 2.0 | 认知策略载荷（`airy_cognition_strategy`）—— 分发、规划、协调、审查、意图策略，注入 daemon。 |
+| **gateway_biz** | 直接追踪（嵌入式） | `gateway_biz/` | AGPL v3 + Apache 2.0 | 网关业务处理面（`airy_gateway_biz`）—— 统一能力派发、命名空间转发、MCP/OpenAI/A2A 后端与 PEP 裁定缓存，仅由 `gateway_d` 装配。 |
 
-> **许可证说明。** `cupolas`、`lang_gateway` 与 `cognition` 采用与 Airymax 平台其余
-> 部分一致的 AGPL v3 + Apache 2.0 双许可证
+> **许可证说明。** `cupolas`、`lang_gateway`、`cognition` 与 `gateway_biz` 采用与
+> Airymax 平台其余部分一致的 AGPL v3 + Apache 2.0 双许可证
 > （SPDX：`AGPL-3.0-or-later OR Apache-2.0`）。
 > `memoryrovol` **不是**开源软件：受 SPHARX 商业 EULA v1.0 约束
 > （SPDX：`LicenseRef-SPHARX-MemoryRovol-EULA-1.0`），其使用需要与授权层级
@@ -94,6 +102,7 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
    │ cupolas      │ gateway / daemons（每个安全边界）       │
    │ lang_gateway │ CoreLoopThree（are_ops_get_lang_gw）    │
    │ cognition    │ daemon 启动期（注入式策略）             │
+   │ gateway_biz  │ gateway_d 构建期装配（业务处理面）       │
    └──────────────┴─────────────────────────────────────────┘
 ```
 

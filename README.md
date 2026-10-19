@@ -1,10 +1,11 @@
-# Airymax Products — Policy Module Aggregation
+# Airymax Products — Product Piece Aggregation
 
-> Policy-module aggregation repository for the Airymax AI Agent Runtime
-> Platform. Collects the platform's policy-type modules — the commercial
-> MemoryRovol memory provider, the `cupolas` security dome, the inference
-> language gateway, and the `cognition` strategy payloads — under a single
-> management surface, keeping policy payloads out of the mechanism core.
+> Product-piece aggregation repository for the Airymax AI Agent Runtime
+> Platform. Collects the platform's policy modules and business form faces —
+> the commercial MemoryRovol memory provider, the `cupolas` security dome, the
+> inference language gateway, the `cognition` strategy payloads, and the
+> `gateway_biz` business handler — under a single management surface, keeping
+> policy payloads out of the mechanism core.
 
 **Language:** English | [简体中文](README_zh.md)
 
@@ -30,6 +31,9 @@ from the mechanism kernel:
 - **cognition** — the cognitive strategy payloads: dispatch, planning,
   coordination, review, and intent strategies, injected into the daemons at
   startup.
+- **gateway_biz** — the gateway business handler: unified capability dispatch,
+  namespace forwarding, protocol backends and the PEP verdict cache, embedded
+  into `gateway_d`.
 
 This repository follows the platform's **mechanism / policy separation**
 principle: the mechanism kernel lives in
@@ -41,13 +45,16 @@ touching the kernel; the kernel keeps a built-in fallback so it stays
 functional when a policy module is absent.
 
 Unlike the developer surface in [`sdk/`](../sdk) — which is a pure leaf
-aggregation — `products/` mixes two aggregation styles on purpose:
+aggregation — `products/` mixes three aggregation styles on purpose:
 
 - **submodule leaves** (`memoryrovol`, `cupolas`) — each is an independent
   repository pinned to an exact commit.
-- **directly-tracked modules** (`lang_gateway`, `cognition`) — modules whose
-  source is managed by this repository itself, with no independent leaf
+- **directly-tracked policy modules** (`lang_gateway`, `cognition`) — modules
+  whose source is managed by this repository itself, with no independent leaf
   repository yet.
+- **directly-tracked embedded product pieces** (`gateway_biz`) — assembled only
+  by `gateway_d` at build time; when absent the daemon is not mounted and no
+  stub is generated.
 
 ## Repository Structure
 
@@ -61,6 +68,8 @@ products/                       # this management repository (AGPL v3 + Apache 2
 │                               #   Inference language gateway (provider-facing)
 ├── cognition/                  # directly-tracked policy module (no leaf repo yet)
 │                               #   Cognitive strategy payloads (dispatch · plan · …)
+├── gateway_biz/                # directly-tracked embedded product piece (gateway_d only)
+│                               #   Gateway business handler (dispatch · forward · PEP cache)
 ├── .gitmodules                 # submodule wiring (2 entries)
 ├── .gitignore                  # whitelist: files + submodule mount points
 ├── LICENSE                     # AGPL v3 + Apache 2.0 (management repo only)
@@ -77,9 +86,11 @@ products/                       # this management repository (AGPL v3 + Apache 2
 | **cupolas** | submodule | `cupolas/` | AGPL v3 + Apache 2.0 | Application-semantic security layer: four-layer inherent security plus the dynamic policy engine (Policy Decision Point). |
 | **lang_gateway** | direct | `lang_gateway/` | AGPL v3 + Apache 2.0 | Inference language gateway (`airy_lang_gateway`) — canonicalizes natural-language input and routes it to the right model. |
 | **cognition** | direct | `cognition/` | AGPL v3 + Apache 2.0 | Cognitive strategy payloads (`airy_cognition_strategy`) — dispatch, planning, coordination, review and intent strategies injected into the daemons. |
+| **gateway_biz** | direct (embedded) | `gateway_biz/` | AGPL v3 + Apache 2.0 | Gateway business handler (`airy_gateway_biz`) — unified capability dispatch, namespace forwarding, MCP/OpenAI/A2A backends and the PEP verdict cache; assembled by `gateway_d` only. |
 
-> **Licensing note.** `cupolas`, `lang_gateway` and `cognition` use the same
-> AGPL v3 + Apache 2.0 dual license as the rest of the Airymax platform
+> **Licensing note.** `cupolas`, `lang_gateway`, `cognition` and `gateway_biz`
+> use the same AGPL v3 + Apache 2.0 dual license as the rest of the Airymax
+> platform
 > (SPDX: `AGPL-3.0-or-later OR Apache-2.0`). `memoryrovol` is **not**
 > open-source: it is governed by the SPHARX Commercial EULA v1.0
 > (SPDX: `LicenseRef-SPHARX-MemoryRovol-EULA-1.0`) and its use requires a
@@ -90,7 +101,9 @@ products/                       # this management repository (AGPL v3 + Apache 2
 Policy modules sit **above** the mechanism kernel and depend on it — never
 the other way around. The kernel exposes stable dispatch contracts; each
 policy module implements one behind that contract, and every module has a
-kernel-side fallback so an absent module degrades rather than breaks.
+kernel-side fallback so an absent module degrades rather than breaks. Embedded
+product pieces follow the same rule in build form: when the piece is absent,
+the assembling daemon is not mounted, never stubbed.
 
 ```
                   ┌─────────────────────────────────────┐
@@ -101,12 +114,13 @@ kernel-side fallback so an absent module degrades rather than breaks.
                                      │  stable contracts:
                                      │  ops dispatch · weak symbols · submodule pin
                                      ▼
-   Policy modules (products/):
+   Product pieces (products/):
    ┌──────────────┬────────────────────────────────────────────┐
    │ memoryrovol  │ AgentRT runtime (AIRY_WITH_MEMORYROVOL)    │
    │ cupolas      │ gateway / daemons (each security boundary) │
    │ lang_gateway │ CoreLoopThree (are_ops_get_lang_gw)        │
    │ cognition    │ daemon startup (ops-injected strategy)     │
+   │ gateway_biz  │ gateway_d build-time assembly (biz face)   │
    └──────────────┴────────────────────────────────────────────┘
 ```
 
