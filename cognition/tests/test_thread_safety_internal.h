@@ -6,6 +6,10 @@
  *   ThreadSanitizer 线程安全验证测试（INT-02）拆分后的共享内部头
  *
  * 共享内容：RUN_TEST 宏、辅助函数与线程工作函数声明。
+ * 线程原语走 platform.h 跨平台面（airy_thread_create/join，POSIX =
+ * pthread，WIN32 = CreateThread/WaitForSingleObject）；MSVC 无
+ * pthread 实现（#1359 实证 test_thread_safety LNK2001），同 think_d
+ * wave-1 收敛口径。
  * 按功能域拆分：
  *   - test_thread_safety_int0201.c：INT-02.1 并发认知引擎测试（4 用例）
  *   - test_thread_safety_int0202.c：INT-02.2 错误处理路径验证（6 用例）
@@ -21,7 +25,6 @@
 #include "error.h"
 
 #include <assert.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
