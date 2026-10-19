@@ -8,7 +8,7 @@
  * 该测试设计为通过 ThreadSanitizer 检测数据竞争：
  *   - 每个线程创建独立的引擎实例
  *   - 若内部存在全局/静态状态竞争，TSan 将报告
- *   - 使用 pthread 进行线程创建和同步
+ *   - 线程创建与同步走 platform.h 跨平台面（airy_thread_create/join）
  */
 
 #include "test_thread_safety_internal.h"
@@ -17,7 +17,7 @@ void test_int02_1_concurrent_cognition_engines(void)
 {
 #define INT02_1_NUM_THREADS 4
 
-    pthread_t threads[INT02_1_NUM_THREADS];
+    airy_thread_t threads[INT02_1_NUM_THREADS];
     thread_worker_args_t args[INT02_1_NUM_THREADS];
     airy_mtx_t result_mutex;
     int result_count = 0;
@@ -38,13 +38,13 @@ void test_int02_1_concurrent_cognition_engines(void)
         args[i].result_count = &result_count;
         args[i].result_mutex = &result_mutex;
 
-        int rc = pthread_create(&threads[i], NULL, thread_worker, &args[i]);
+        int rc = airy_thread_create(&threads[i], thread_worker, &args[i]);
         assert(rc == 0);
     }
 
     for (int i = 0; i < INT02_1_NUM_THREADS; i++) {
         void *retval = NULL;
-        int rc = pthread_join(threads[i], &retval);
+        int rc = airy_thread_join(threads[i], &retval);
         assert(rc == 0);
         printf("    Thread %d joined: retval=%d\n", i + 1, (int)(intptr_t)retval);
     }
@@ -62,7 +62,7 @@ void test_int02_1_concurrent_feedback_engines(void)
 {
 #define INT02_1_FB_NUM_THREADS 4
 
-    pthread_t threads[INT02_1_FB_NUM_THREADS];
+    airy_thread_t threads[INT02_1_FB_NUM_THREADS];
     thread_feedback_worker_args_t args[INT02_1_FB_NUM_THREADS];
     airy_mtx_t result_mutex;
     int result_count = 0;
@@ -82,13 +82,13 @@ void test_int02_1_concurrent_feedback_engines(void)
         args[i].result_count = &result_count;
         args[i].result_mutex = &result_mutex;
 
-        int rc = pthread_create(&threads[i], NULL, thread_feedback_worker, &args[i]);
+        int rc = airy_thread_create(&threads[i], thread_feedback_worker, &args[i]);
         assert(rc == 0);
     }
 
     for (int i = 0; i < INT02_1_FB_NUM_THREADS; i++) {
         void *retval = NULL;
-        int rc = pthread_join(threads[i], &retval);
+        int rc = airy_thread_join(threads[i], &retval);
         assert(rc == 0);
         printf("    FB-Thread %d joined: retval=%d\n", i + 1, (int)(intptr_t)retval);
     }
@@ -105,7 +105,7 @@ void test_int02_1_concurrent_strategy_engines(void)
 {
 #define INT02_1_ST_NUM_THREADS 4
 
-    pthread_t threads[INT02_1_ST_NUM_THREADS];
+    airy_thread_t threads[INT02_1_ST_NUM_THREADS];
     thread_strategy_worker_args_t args[INT02_1_ST_NUM_THREADS];
     airy_mtx_t result_mutex;
     int result_count = 0;
@@ -125,13 +125,13 @@ void test_int02_1_concurrent_strategy_engines(void)
         args[i].result_count = &result_count;
         args[i].result_mutex = &result_mutex;
 
-        int rc = pthread_create(&threads[i], NULL, thread_strategy_worker, &args[i]);
+        int rc = airy_thread_create(&threads[i], thread_strategy_worker, &args[i]);
         assert(rc == 0);
     }
 
     for (int i = 0; i < INT02_1_ST_NUM_THREADS; i++) {
         void *retval = NULL;
-        int rc = pthread_join(threads[i], &retval);
+        int rc = airy_thread_join(threads[i], &retval);
         assert(rc == 0);
         printf("    ST-Thread %d joined: retval=%d\n", i + 1, (int)(intptr_t)retval);
     }
@@ -148,7 +148,7 @@ void test_int02_1_mixed_concurrent_engines(void)
 {
 #define INT02_1_MIX_NUM_THREADS 6
 
-    pthread_t threads[INT02_1_MIX_NUM_THREADS];
+    airy_thread_t threads[INT02_1_MIX_NUM_THREADS];
     mix_worker_args_t args[INT02_1_MIX_NUM_THREADS];
     airy_mtx_t result_mutex;
     int result_count = 0;
@@ -174,13 +174,13 @@ void test_int02_1_mixed_concurrent_engines(void)
         args[i].result_count = &result_count;
         args[i].result_mutex = &result_mutex;
 
-        int rc = pthread_create(&threads[i], NULL, thread_mix_worker, &args[i]);
+        int rc = airy_thread_create(&threads[i], thread_mix_worker, &args[i]);
         assert(rc == 0);
     }
 
     for (int i = 0; i < INT02_1_MIX_NUM_THREADS; i++) {
         void *retval = NULL;
-        int rc = pthread_join(threads[i], &retval);
+        int rc = airy_thread_join(threads[i], &retval);
         assert(rc == 0);
         printf("    Mix-Thread %d joined: retval=%d\n", i + 1, (int)(intptr_t)retval);
     }
