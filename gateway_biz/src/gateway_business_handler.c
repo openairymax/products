@@ -389,7 +389,7 @@ char *gateway_protocol_entry(void *request, void *user_data)
         }
     }
 
-    if (proto == GW_PROTO_DETECT_MCP || proto == GW_PROTO_DETECT_OPENAI ||
+    if (proto == GW_PROTO_DETECT_MCP || proto == GW_PROTO_DETECT_LLM_API ||
         proto == GW_PROTO_DETECT_A2A) {
         char *resp = NULL;
         int rc = gw_proto_router_route((gw_proto_router_t *)ectx->router, proto, method, path, body,
