@@ -135,9 +135,12 @@ gateway_business_ctx_t *gateway_business_ctx_create(void)
         (port_env && *port_env) ? (uint16_t)atoi(port_env) : GW_LLM_DEFAULT_TCP_PORT;
 
     /* 默认模型经 svc_model_defaults_resolve() 解析（唯一入口）：env
-     * AIRY_AGENT_MODEL > 用户覆盖 $AIRY_CONFIG_DIR/model.yaml > 内建兜底。
-     * gateway 不再自行扫描 model.yaml，与 llm_d / agent_d runner 同源。 */
-    svc_model_defaults_resolve(NULL, NULL, ctx->default_model, sizeof(ctx->default_model), NULL, 0);
+     * AIRY_AGENT_MODEL > 用户覆盖 $AIRY_CONFIG_DIR/model.yaml > 请求 model。
+     * gateway 不再自行扫描 model.yaml，与 llm_d / agent_d runner 同源；
+     * 无来源时留空并由请求期 fail-closed，不注入任何厂商默认值。 */
+    if (svc_model_defaults_resolve(NULL, NULL, ctx->default_model, sizeof(ctx->default_model), NULL,
+                                   0) != 0)
+        AIRY_LOG_WARN("gateway: no default model configured (model.yaml / AIRY_AGENT_MODEL)");
 
     /* 架构约束 2026-08-25 "必须走 syscall": 注入微核心服务统一派发钩子，
      * gateway 对 daemon 的所有派发经 airy_sys_svc_call() (SYS_SVC_CALL)
