@@ -93,10 +93,12 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     add_subdirectory("${AGENTRT_ROOT}/commons" commons)
     unset(BUILD_TESTS)
 
-    # body 断链回退锚：commons / 契约头 / corekern 头均指向 agentrt 管理仓
+    # body 断链回退锚：commons / 契约头 / corekern 头 / memory 契约头均指向
+    # agentrt 管理仓
     set(COG_COMMONS_DIR "${AGENTRT_ROOT}/commons")
     set(COG_CONTRACT_DIR "${AGENTRT_ROOT}/atoms/coreloopthree/include")
     set(AIRY_COREKERN_INCLUDE_DIR "${AGENTRT_ROOT}/atoms/corekern/include")
+    set(COG_MEMORY_INCLUDE_DIR "${AGENTRT_ROOT}/atoms/memory/include")
 endif()
 
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -115,6 +117,9 @@ if(NOT COG_CONTRACT_DIR)
 endif()
 if(NOT AIRY_COREKERN_INCLUDE_DIR)
     set(AIRY_COREKERN_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/atoms/corekern/include")
+endif()
+if(NOT COG_MEMORY_INCLUDE_DIR)
+    set(COG_MEMORY_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/atoms/memory/include")
 endif()
 
 # cJSON 检测：embedded 复用根检测 CACHE（coreloopthree 提升的 AIRY_CJSON_*）；
@@ -239,8 +244,18 @@ if(NOT TARGET airy_cognition)
         "${COG_CONTRACT_DIR}/../src/ops/ops_injection.c")
 endif()
 
+# 记忆域机制件（0.1.19 C3 后双栈清退，仅留守 provider 注册表与查询结果
+# 释放辅助）：tc_memory 经 provider vtable 读写记忆，释放辅助来自该件。
+# embedded 形态由 airy_memory 目标提供；standalone 形态（未纳入 atoms）
+# 直编其实现单元，使本库自包含。镜像 COG_LLM_OPS_SRC 范式。
+set(COG_MEM_SRC "")
+if(NOT TARGET airy_memory)
+    set(COG_MEM_SRC "${AGENTRT_ROOT}/atoms/memory/src/provider_registry.c")
+endif()
+
 add_library(airy_cognition_strategy STATIC
-    ${COGNITION_SOURCES} ${COGNITION_HEADERS} ${COG_LLM_OPS_SRC} ${COG_PLAN_BASE_SRC})
+    ${COGNITION_SOURCES} ${COGNITION_HEADERS} ${COG_LLM_OPS_SRC} ${COG_PLAN_BASE_SRC}
+    ${COG_MEM_SRC})
 
 target_include_directories(airy_cognition_strategy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -274,6 +289,9 @@ target_include_directories(airy_cognition_strategy PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<BUILD_INTERFACE:${COG_CONTRACT_DIR}>
     $<BUILD_INTERFACE:${AIRY_COREKERN_INCLUDE_DIR}>
+    # 记忆契约头（provider.h）：thinking_chain.h 以裸名消费 memory provider
+    # vtable；embedded 由根全局 include 解析，standalone 须显式传播。
+    $<BUILD_INTERFACE:${COG_MEMORY_INCLUDE_DIR}>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/platform/include>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/include>
     $<BUILD_INTERFACE:${COG_COMMONS_DIR}/utils/error>
