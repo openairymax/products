@@ -75,13 +75,31 @@ static void family_from_model(const char *model, const char *provider,
     }
 }
 
-/* 经 llm_d count_tokens RPC 统计文本 token 数（tiktoken/启发式编码）。 */
+/* 分词族映射（产品侧策略）：机制核只识别 generic|bpe|spm|uniform，
+ * 模型名到算法族的归属属于策略，随产品发布。 */
+static const char *token_family_of(const char *model)
+{
+    if (!model)
+        return "generic";
+    if (strstr(model, "gpt-4") || strstr(model, "gpt-4o") ||
+        strstr(model, "gpt-35") || strstr(model, "gpt-3.5"))
+        return "bpe";
+    if (strstr(model, "claude") || strstr(model, "Claude"))
+        return "uniform";
+    if (strstr(model, "llama") || strstr(model, "Llama") ||
+        strstr(model, "vicuna") || strstr(model, "alpaca"))
+        return "spm";
+    return "generic";
+}
+
+/* 经 llm_d count_tokens RPC 统计文本 token 数（按声明的分词族计数）。 */
 static int rpc_count_tokens(const char *socket, const char *model, const char *text,
                             int64_t *out_tokens)
 {
     char params[1024];
-    int n = snprintf(params, sizeof(params), "{\"model\":\"%s\",\"text\":\"%s\"}",
-                     model ? model : "", text);
+    int n = snprintf(params, sizeof(params),
+                     "{\"family\":\"%s\",\"model\":\"%s\",\"text\":\"%s\"}",
+                     token_family_of(model), model ? model : "", text);
     if (n < 0 || (size_t)n >= sizeof(params))
         return -1;
 
