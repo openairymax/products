@@ -405,6 +405,17 @@ airy_err_t grad_patch_build(uint32_t iteration, const grad_defect_t *defects,
                             size_t scope_count, char **out_json);
 
 /**
+ * @brief 构建整份重绘 patch JSON（repair_mode=full，§5.2b.3 唯一升级路径）。
+ *
+ * 用于闭包超界（E2BIG）与 patch_inconsistent 之后的一轮：affected_scope
+ * 取全部节点 id（非空，满足 G55），defects 可为空（C 侧判据触发的重绘）。
+ *
+ * @ownership out_json: OWNER（调用方 AIRY_FREE）
+ */
+airy_err_t grad_patch_full(const airy_task_plan_t *plan, uint32_t iteration,
+                           const grad_defect_t *defects, size_t defect_count, char **out_json);
+
+/**
  * @brief 合并 sub（模型 A 修补产物）到 plan：scope 内整节点替换，
  *        frozen 逐字段精确相等，sub 新节点仅限 scope（E-01 插入生产者）。
  *

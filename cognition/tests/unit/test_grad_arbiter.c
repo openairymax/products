@@ -6,6 +6,9 @@
  *   GRAD B 终裁测试域：置信度降级（低置信 reject 忽略 / 高置信触发修复）、
  *   E-04 目的漂移守门（e04=fail 硬拒绝）、畸形终裁输入（markdown 围栏、
  *   纯文本、类型异常 confidence、空串）健壮性。
+ *
+ * 0.1.20 §5.2b.4 + G55：reject 必须携带可定位到计划节点的 defects，
+ * 否则 Δk 修补域无 scope（模板 patch）→ 降级"采纳 C 判定"。
  */
 
 #include "test_grad_internal.h"
@@ -142,9 +145,12 @@ void test_arbiter_conf_degrade(void)
         free_plan(final);
     airy_grad_coordinator_destroy(coord);
 
-    /* 高置信度 reject（0.9 ≥ 0.55）→ 终裁生效 → 触发修复循环 */
+    /* 高置信度 reject（0.9 ≥ 0.55）+ 可定位 defect → 终裁生效 → 修复循环 */
     __builtin_memset(&s2mc, 0, sizeof(s2mc));
-    amc.verdict_json = "{\"verdict\":\"reject\",\"confidence\":0.9}";
+    amc.verdict_json = "{\"verdict\":\"reject\",\"confidence\":0.9,"
+                       "\"defects\":[{\"node_id\":\"S_01\",\"code\":\"SEM\","
+                       "\"evidence\":\"step does not satisfy the goal\","
+                       "\"suggestion\":\"specialize the executor step\"}]}";
     coord = NULL;
     err = airy_grad_coordinator_create(&cfg, &coord);
     if (err != AIRY_SUCCESS || !coord) {
@@ -193,7 +199,10 @@ void test_arbiter_e04_purpose_drift(void)
     grad_mock_ctx_t s2mc;
     __builtin_memset(&s2mc, 0, sizeof(s2mc));
     grad_arb_ctx_t amc = {
-        .verdict_json = "{\"verdict\":\"accept\",\"confidence\":0.9,\"e04\":\"fail\"}",
+        .verdict_json = "{\"verdict\":\"accept\",\"confidence\":0.9,\"e04\":\"fail\","
+                        "\"defects\":[{\"node_id\":\"S_01\",\"code\":\"SEM\","
+                        "\"evidence\":\"guard outputs drift from the goal\","
+                        "\"suggestion\":\"realign guard outputs with goal entities\"}]}",
         .verdict_json_2 = "{\"verdict\":\"accept\",\"confidence\":0.9,\"e04\":\"pass\"}",
     };
 
@@ -245,14 +254,28 @@ void test_arbiter_malformed_verdicts(void)
     /* 3. verdict 空串 → cJSON_Parse 失败 → defer to C */
     run_arb_verdict("", 0, "empty verdict defers to C");
 
-    /* 4. confidence 字符串 "0.9"（LLM 常见）→ atof → 高置信 → 修复循环 */
-    run_arb_verdict("{\"verdict\":\"reject\",\"confidence\":\"0.9\"}", 1,
-                    "string confidence parsed (high conf reject)");
+    /* 4. confidence 字符串 "0.9"（LLM 常见）→ 数值归一 → 高置信 → 修复循环 */
+    run_arb_verdict("{\"verdict\":\"reject\",\"confidence\":\"0.9\","
+                    "\"defects\":[{\"node_id\":\"S_01\",\"code\":\"SEM\","
+                    "\"evidence\":\"e\",\"suggestion\":\"s\"}]}",
+                    1, "string confidence parsed (high conf reject)");
 
-    /* 5. confidence 数组类型 → 非法 → 0.0（θ_B 保护）→ 忽略 reject → 收敛 */
-    run_arb_verdict("{\"verdict\":\"reject\",\"confidence\":[0.9]}", 0,
-                    "array confidence treated as 0.0 (ignored)");
+    /* 5. confidence 数组类型 → 契约违例（arbiter_parse_error）→ 采纳 C → 收敛 */
+    run_arb_verdict("{\"verdict\":\"reject\",\"confidence\":[0.9],"
+                    "\"defects\":[{\"node_id\":\"S_01\",\"code\":\"SEM\","
+                    "\"evidence\":\"e\",\"suggestion\":\"s\"}]}",
+                    0, "array confidence treated as contract violation (ignored)");
 
     /* 6. verdict 缺失 → 不 reject → 采纳 C → 收敛 */
     run_arb_verdict("{\"confidence\":0.9}", 0, "missing verdict converges");
+
+    /* 7. G55：reject 无 defects（模板 patch）→ 无 Δk scope → 采纳 C → 收敛 */
+    run_arb_verdict("{\"verdict\":\"reject\",\"confidence\":0.9}", 0,
+                    "reject without defects downgraded (G55 template patch)");
+
+    /* 8. G55：defect 节点不在计划内 → 不可定位 → 采纳 C → 收敛 */
+    run_arb_verdict("{\"verdict\":\"reject\",\"confidence\":0.9,"
+                    "\"defects\":[{\"node_id\":\"GHOST_9\",\"code\":\"SEM\","
+                    "\"evidence\":\"e\",\"suggestion\":\"s\"}]}",
+                    0, "unlocatable defect node downgraded (patch_invalid)");
 }
