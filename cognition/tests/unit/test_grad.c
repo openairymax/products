@@ -221,6 +221,10 @@ int main(void)
     RUN_TEST(test_schema_node_fields);
     RUN_TEST(test_schema_structure);
     RUN_TEST(test_schema_inputs);
+    RUN_TEST(test_meta_outputs_fill);
+    RUN_TEST(test_meta_inputs_fill);
+    RUN_TEST(test_meta_cost_fill);
+    RUN_TEST(test_meta_explicit_kept);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
            tests_failed);

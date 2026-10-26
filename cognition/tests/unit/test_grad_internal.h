@@ -116,4 +116,10 @@ void test_schema_node_fields(void);
 void test_schema_structure(void);
 void test_schema_inputs(void);
 
+/* GRAD 缺省元数据推导域（test_grad_metadata.c，0.1.20 C4） */
+void test_meta_outputs_fill(void);
+void test_meta_inputs_fill(void);
+void test_meta_cost_fill(void);
+void test_meta_explicit_kept(void);
+
 #endif /* TEST_GRAD_INTERNAL_H */

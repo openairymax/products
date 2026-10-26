@@ -166,7 +166,8 @@ static int c11_fake_complete(void *ctx, const llm_request_config_t *cfg, llm_res
     __builtin_memset(&g_c11_resp, 0, sizeof(g_c11_resp));
     g_c11_resp.choices = g_c11_choices;
     g_c11_resp.choice_count = 1;
-    g_c11_resp.finish_reason = f->finish_reason;
+    /* fake 只读借用串：llm_response_t 不拥有 finish_reason，边界处显式转移 */
+    g_c11_resp.finish_reason = (char *)f->finish_reason;
     *out = &g_c11_resp;
     return 0;
 }

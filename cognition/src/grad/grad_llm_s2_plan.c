@@ -18,14 +18,17 @@ static const char GRAD_S2_SYSTEM_PROMPT[] =
     "Reply with ONLY a JSON object (no markdown fences):\n"
     "{\n"
     "  \"nodes\": [\n"
-    "    {\"id\":\"S_01\",\"goal\":\"...\",\"role\":\"creator\",\"depends\":[],\n"
-    "     \"inputs\":[],\"outputs\":[\"artifact_a\"],\n"
-    "     \"cost_time_ms\":1000,\"cost_mem_mb\":64,\"invariant_guard\":false}\n"
+    "    {\"id\":\"S_01\",\"goal\":\"...\",\"role\":\"retrieve\",\"depends\":[],\n"
+    "     \"inputs\":[\"lit:seed\"],\"outputs\":[\"artifact_a\"],\n"
+    "     \"cost_time_ms\":3000,\"cost_mem_mb\":128,\"invariant_guard\":false}\n"
     "  ],\n"
     "  \"entry\":[\"S_01\"]\n"
     "}\n"
     "Rules: every node's inputs must be produced by its transitive predecessors "
-    "(no dangling dependencies); the graph must be acyclic; total cost is bounded; "
+    "(no dangling dependencies); the graph must be acyclic; "
+    "role must be one of plan, retrieve, reason, act, verify; "
+    "outputs, inputs, cost_time_ms and cost_mem_mb may be omitted "
+    "(they are inferred automatically, but explicit values are preferred); "
     "nodes that must not break the goal's core invariant set invariant_guard=true.";
 
 /**
@@ -82,7 +85,8 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
     } else {
         snprintf(prompt, cap,
                  "Confirmed goal (G): %s\n\n"
-                 "Generate an initial skeleton plan JSON. Keep it minimal but logically sound.",
+                 "Generate the initial plan JSON. Decompose the goal into concrete "
+                 "nodes (typically 3-5) with real dependencies and verifiable outputs.",
                  goal_json);
     }
     AIRY_FREE(goal_json);
@@ -271,6 +275,10 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
         }
     }
 
+    /* C4：缺省元数据（outputs/inputs/cost）推导补全，只补缺省不覆盖显式值；
+     * 推导占比过高时内部告警，不改变成功路径结果。 */
+    grad_plan_metadata_fill(plan);
+
     cJSON_Delete(root);
     *out_plan = plan;
     return AIRY_SUCCESS;
@@ -289,8 +297,8 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
     node->task_node_id = AIRY_STRDUP("S_01");
     node->task_node_id_len = 4;
     node->task_node_goal = AIRY_STRDUP("execute confirmed goal");
-    node->task_node_agent_role = AIRY_STRDUP("executor");
-    node->task_node_role_len = 8;
+    node->task_node_agent_role = AIRY_STRDUP("act");
+    node->task_node_role_len = 3;
     node->task_node_timeout_ms = 30000;
     node->task_node_priority = 150;
     plan->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
@@ -305,6 +313,7 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
     }
     plan->task_plan_nodes[0] = node;
     plan->task_plan_node_count = 1;
+    grad_plan_metadata_fill(plan);
     plan->task_plan_entry_points = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (plan->task_plan_entry_points) {
         plan->task_plan_entry_points[0] = AIRY_STRDUP("S_01");
