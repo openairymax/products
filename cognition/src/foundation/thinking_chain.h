@@ -196,13 +196,6 @@ AIRY_API airy_err_t airy_tc_context_window_get_recent(airy_context_window_t *win
                                                       size_t *out_len);
 
 /**
- * @brief Check whether the Context Window has enough space.
- * @param needed_tokens Tokens needed
- * @return 1=has space, 0=insufficient space
- */
-AIRY_API int airy_tc_context_window_has_space(airy_context_window_t *window, size_t needed_tokens);
-
-/**
  * @brief Get Context Window statistics.
  */
 AIRY_API airy_err_t airy_tc_context_window_stats(airy_context_window_t *window, char **out_json);
@@ -342,14 +335,6 @@ AIRY_API airy_err_t airy_tc_chain_next_ready_step(airy_thinking_chain_t *chain,
  */
 AIRY_API airy_err_t airy_tc_chain_stats(airy_thinking_chain_t *chain, char **out_json,
                                         size_t *out_len);
-
-/**
- * @brief Set the step-completion callbacks.
- */
-AIRY_API void airy_tc_chain_set_step_callback(
-    airy_thinking_chain_t *chain, void (*on_step_completed)(airy_thinking_step_t *, void *),
-    void (*on_correction)(airy_thinking_step_t *, const char *, void *), void *user_data);
-
 
 AIRY_API void airy_tc_chain_set_memory(airy_thinking_chain_t *chain, airy_memory_provider_t *memory);
 
