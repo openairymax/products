@@ -15,6 +15,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -87,21 +88,28 @@ int man_write(const struct canary_s *c, const char *state,
     char tmp[CANARY_PATH_MAX];
     char hex[65];
     char dir[CANARY_PATH_MAX];
+    char body[256];
+    int n;
     FILE *f;
 
     if (man_path(c, path, sizeof(path), MAN_NAME) != 0)
         return -1;
     if (man_path(c, tmp, sizeof(tmp), MAN_NAME ".tmp") != 0)
         return -1;
-    memcpy(dir, c->overlay, strlen(c->overlay) + 1);
+    snprintf(dir, sizeof(dir), "%s", c->overlay);
     if (canary_mkdir_p(dir) != 0)
         return -1;
     f = fopen(tmp, "wb");
     if (!f)
         return -1;
     sha256_hex(hash, hex);
-    fprintf(f, "module=%s\nstate=%s\nbase_sha256=%s\ncreated_ms=%llu\n",
-            c->module, state, hex, (unsigned long long)ms);
+    n = snprintf(body, sizeof(body),
+                 "module=%s\nstate=%s\nbase_sha256=%s\ncreated_ms=%llu\n",
+                 c->module, state, hex, (unsigned long long)ms);
+    if (n < 0 || (size_t)n >= sizeof(body) || fputs(body, f) == EOF) {
+        fclose(f);
+        return -1;
+    }
     if (fclose(f) != 0)
         return -1;
     if (remove(path) != 0 && errno != ENOENT)
@@ -117,6 +125,24 @@ int man_read(const struct canary_s *c, char *state, size_t cap,
     return man_read_ms(c, state, cap, hash, NULL);
 }
 
+/* 取 "key=value" 行的 value 段：key 命中返回 1 并拷出 value，否则 0 */
+static int man_field(const char *line, const char *key,
+                     char *val, size_t cap)
+{
+    size_t n = strlen(key);
+    size_t i = 0;
+
+    if (strncmp(line, key, n) != 0 || line[n] != '=')
+        return 0;
+    line += n + 1;
+    while (line[i] != '\0' && line[i] != '\n' && i + 1 < cap) {
+        val[i] = line[i];
+        i++;
+    }
+    val[i] = '\0';
+    return 1;
+}
+
 int man_read_ms(const struct canary_s *c, char *state, size_t cap,
                 uint8_t hash[32], uint64_t *ms_out)
 {
@@ -124,6 +150,7 @@ int man_read_ms(const struct canary_s *c, char *state, size_t cap,
     char line[192];
     char hex[72];
     char mod[CANARY_NAME_MAX];
+    char num[24];
     unsigned long long ms = 0ull;
     int found = 0;
     FILE *f;
@@ -136,14 +163,16 @@ int man_read_ms(const struct canary_s *c, char *state, size_t cap,
     if (!f)
         return -1;
     while (fgets(line, sizeof(line), f)) {
-        if (sscanf(line, "module=%63s", mod) == 1)
+        if (man_field(line, "module", mod, sizeof(mod)))
             continue;
-        if (sscanf(line, "state=%15s", state) == 1)
+        if (man_field(line, "state", state, cap))
             found |= 1;
-        else if (sscanf(line, "base_sha256=%71s", hex) == 1)
+        else if (man_field(line, "base_sha256", hex, sizeof(hex)))
             found |= 2;
-        else if (sscanf(line, "created_ms=%llu", &ms) == 1)
+        else if (man_field(line, "created_ms", num, sizeof(num))) {
+            ms = strtoull(num, NULL, 10);
             found |= 4;
+        }
     }
     fclose(f);
     if ((found & 3) != 3 || hex_dec(hex, hash) != 0)

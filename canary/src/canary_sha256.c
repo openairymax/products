@@ -9,8 +9,6 @@
  */
 #include "canary_sha256.h"
 
-#include <string.h>
-
 static const uint32_t K[64] = {
     0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u,
     0x3956c25bu, 0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u,
@@ -101,8 +99,10 @@ void sha256_init(sha256_ctx *ctx)
         0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
         0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u
     };
+    int i;
 
-    memcpy(ctx->h, IV, sizeof(IV));
+    for (i = 0; i < 8; i++)
+        ctx->h[i] = IV[i];
     ctx->len = 0;
     ctx->fill = 0;
 }
@@ -110,6 +110,7 @@ void sha256_init(sha256_ctx *ctx)
 void sha256_update(sha256_ctx *ctx, const void *data, size_t len)
 {
     const uint8_t *p = data;
+    size_t i;
 
     ctx->len += (uint64_t)len;
     if (ctx->fill > 0) {
@@ -117,7 +118,8 @@ void sha256_update(sha256_ctx *ctx, const void *data, size_t len)
 
         if (take > len)
             take = len;
-        memcpy(ctx->buf + ctx->fill, p, take);
+        for (i = 0; i < take; i++)
+            ctx->buf[ctx->fill + i] = p[i];
         ctx->fill += take;
         p += take;
         len -= take;
@@ -132,7 +134,8 @@ void sha256_update(sha256_ctx *ctx, const void *data, size_t len)
         len -= 64;
     }
     if (len > 0) {
-        memcpy(ctx->buf, p, len);
+        for (i = 0; i < len; i++)
+            ctx->buf[i] = p[i];
         ctx->fill = len;
     }
 }
