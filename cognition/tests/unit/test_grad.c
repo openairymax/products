@@ -122,6 +122,7 @@ airy_err_t grad_mock_s2(const airy_gccp_goal_t *goal, const char *patch_json,
                         airy_task_plan_t **out_plan, void *user_data)
 {
     grad_mock_ctx_t *mc = (grad_mock_ctx_t *)user_data;
+    static const char *s01_out[] = {"s01.done"};
     (void)goal;
     if (mc)
         mc->s2_call_count++;
@@ -137,8 +138,10 @@ airy_err_t grad_mock_s2(const airy_gccp_goal_t *goal, const char *patch_json,
         return AIRY_ENOMEM;
     }
     (void)patch_json;
+    /* C5（0.1.20）：E-05 any 语义要求节点元数据完备（outputs+cost），
+     * 否则 mock 计划在 verify 门即被拒，协调器路径无法抵达终裁。 */
     plan->task_plan_nodes[plan->task_plan_node_count++] =
-        make_node("S_01", "execute", "executor", NULL, 0, NULL, 0, 10, 0);
+        make_node("S_01", "execute", "executor", NULL, 0, s01_out, 1, 10, 0);
     plan->task_plan_entry_points = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (plan->task_plan_entry_points) {
         plan->task_plan_entry_points[0] = AIRY_STRDUP("S_01");
@@ -221,6 +224,7 @@ int main(void)
     RUN_TEST(test_schema_node_fields);
     RUN_TEST(test_schema_structure);
     RUN_TEST(test_schema_inputs);
+    RUN_TEST(test_e04_guard_drift);
     RUN_TEST(test_meta_outputs_fill);
     RUN_TEST(test_meta_inputs_fill);
     RUN_TEST(test_meta_cost_fill);

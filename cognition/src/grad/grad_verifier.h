@@ -18,12 +18,17 @@
  *     (Kahn topological sort)
  *   - E-03 resource conservation (resource collapse): Σ cost(v_i) ≤ R_total
  *     (per component)
- *   - E-04 invariant preservation (purpose drift): invariant_guard nodes
- *     must not break goal G
+ *   - E-04 purpose drift guard (0.1.20 C5): with a goal supplied, every
+ *     invariant_guard node's outputs must share entity overlap with the
+ *     goal keywords (bidirectional substring match)
+ *   - E-05 verification insufficiency: metadata coverage — a plan is
+ *     rejected when any participating node lacks checkable metadata
  *
- * Conservative policy: when metadata is unknown (inputs/outputs NULL,
- * cost 0), the corresponding check is skipped (returns OK); strict
- * judgment is applied only when metadata is sufficient.
+ * Conservative policy: checks rely only on structured metadata, never
+ * on natural-language text; a node lacking metadata is not strictly
+ * judged for causality/resources but still counted in the metadata_ok
+ * coverage, and a plan where no node carries checkable metadata is
+ * rejected as E-05 (empty-shell plans can no longer report OK).
  *
  * @see atoms/coreloopthree/docs/GRAD.md
  */
@@ -56,12 +61,26 @@ typedef enum {
      * single node was strictly verified. Rejecting closes the false
      * convergence hole where an "empty-shell" LLM plan skipped every check
      * and still reported OK. */
-    AIRY_GRAD_E05_VERIFY_INSUFFICIENT
-    /* E-04 purpose drift has no deterministic error code: the deterministic
-     * layer counts invariant_guard flags (report->invariant_guards) and the
-     * semantic layer (model B arbiter, grad_llm_s1_arbiter) evaluates guard
-     * nodes against goal G, returning e04=pass|fail in the verdict. */
+    AIRY_GRAD_E05_VERIFY_INSUFFICIENT,
+    /* E-04 purpose-drift guard (0.1.20 C5, deterministic): with a goal
+     * supplied, some invariant_guard node's outputs share zero entity
+     * overlap with the goal keywords — the guard protects entities the
+     * goal never mentions, i.e. purpose drift. Without a goal the check
+     * is not applicable and only invariant_guards is counted; the
+     * semantic layer (model B arbiter, grad_llm_s1_arbiter) still owns
+     * the finer-grained e04=pass|fail verdict. */
+    AIRY_GRAD_E04_GUARD_DRIFT
 } airy_grad_error_t;
+
+/** @brief errors 位图位提取：bit(e) = 1 << airy_grad_error_t 枚举值。 */
+#define AIRY_GRAD_ERR_BIT(e) (1u << (int)(e))
+
+/** @brief E-04 guard 判定三态（report->guard_state）。 */
+typedef enum {
+    AIRY_GRAD_GUARD_NONE = 0, /**< goal 缺席，不判定（交语义层 B 仲裁） */
+    AIRY_GRAD_GUARD_PASS = 1, /**< 全部 guard 节点 outputs 与 goal 实体有交集 */
+    AIRY_GRAD_GUARD_FAIL = 2  /**< 存在 guard 节点 outputs 与 goal 零交集 */
+} airy_grad_guard_state_t;
 
 
 typedef struct airy_grad_budget {
@@ -77,9 +96,16 @@ typedef struct airy_grad_report {
     char cycle_path[512];
     int64_t cost_sum_ms;
     int64_t cost_sum_mb;
-    uint32_t checked_nodes;
+    uint32_t checked_nodes;     /**< E-01 因果受检数（= causal_checked 兼容别名） */
     uint32_t skipped_nodes;
     uint32_t invariant_guards;
+    /* C5（0.1.20）判定细化字段（尾部追加，ABI 兼容）：失败不再只报
+     * 单值首错，errors 位图保留全部命中判据，供调度层聚合与回归。 */
+    uint32_t errors;         /**< 判定位图，AIRY_GRAD_ERR_BIT(e) 按位或 */
+    uint32_t causal_checked; /**< E-01 受检节点数（空 inputs 平凡通过亦计） */
+    uint32_t cost_checked;   /**< E-03 参与守恒累计节点数（不再污染 checked_nodes） */
+    uint32_t metadata_ok;    /**< 元数据完备节点数（见 airy_grad_verify_plan_g） */
+    uint8_t guard_state;     /**< airy_grad_guard_state_t（goal 缺席 = NONE） */
 } airy_grad_report_t;
 
 /**
@@ -104,6 +130,29 @@ airy_err_t airy_grad_verify_plan(const airy_task_plan_t *plan,
                                  airy_grad_report_t *report);
 
 /**
+ * @brief Full-plan verification with an optional goal (0.1.20 C5).
+ *
+ * Equivalent to airy_grad_verify_plan plus two goal-driven refinements:
+ * E-04 purpose-drift guard (guard nodes' outputs must overlap the goal
+ * keywords) and the any-semantics E-05 metadata-coverage gate. When
+ * goal is NULL, E-04 degrades to guard counting (guard_state = NONE)
+ * and E-05 still applies — metadata completeness is goal-independent.
+ *
+ * @param plan [in] Task plan (non-NULL, BORROW)
+ * @param budget [in] Resource budget (NULL means no E-03 constraint)
+ * @param goal [in] GCCP goal (NULL = E-04 not applicable)
+ * @param report [out] Verification report (non-NULL, OUT)
+ * @return AIRY_SUCCESS / AIRY_EINVAL
+ *
+ * @ownership report: NONE
+ * @threadsafe yes
+ */
+airy_err_t airy_grad_verify_plan_g(const airy_task_plan_t *plan,
+                                   const airy_grad_budget_t *budget,
+                                   const airy_gccp_goal_t *goal,
+                                   airy_grad_report_t *report);
+
+/**
  * @brief Differential verification scope (GRAD differential entropy reduction:
  *        verify only Δ_k and its first-order closure).
  *
@@ -126,6 +175,32 @@ airy_err_t airy_grad_verify_scope(const airy_task_plan_t *plan,
                                   const airy_grad_budget_t *budget,
                                   const char *const *scope_nodes, size_t scope_count,
                                   airy_grad_report_t *report);
+
+/**
+ * @brief Scope verification with an optional goal (0.1.20 C5).
+ *
+ * airy_grad_verify_scope plus the same goal-driven refinements as
+ * airy_grad_verify_plan_g: E-04 guard check against goal keywords and
+ * any-semantics E-05 over the participating set (delta closure in
+ * scope mode, all nodes when degrading to full verification).
+ *
+ * @param plan [in] Task plan (non-NULL, BORROW)
+ * @param budget [in] Resource budget (NULL means no E-03 constraint)
+ * @param goal [in] GCCP goal (NULL = E-04 not applicable)
+ * @param scope_nodes [in] Changed node ID array (NULL = full verification)
+ * @param scope_count [in] Number of changed nodes
+ * @param report [out] Verification report (non-NULL, OUT)
+ * @return AIRY_SUCCESS / AIRY_EINVAL / AIRY_ENOMEM
+ *
+ * @ownership report: NONE
+ * @threadsafe yes
+ */
+airy_err_t airy_grad_verify_scope_g(const airy_task_plan_t *plan,
+                                    const airy_grad_budget_t *budget,
+                                    const airy_gccp_goal_t *goal,
+                                    const char *const *scope_nodes,
+                                    size_t scope_count,
+                                    airy_grad_report_t *report);
 
 /**
  * @brief Human-readable error-code description.
