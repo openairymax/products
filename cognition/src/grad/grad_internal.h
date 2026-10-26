@@ -344,6 +344,9 @@ char *grad_goal_to_json(const airy_gccp_goal_t *goal, const grad_llm_ctx_t *ctx)
 airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
                                 airy_task_plan_t **out_plan);
 
+/* plan_metadata.c — 缺省元数据推导（0.1.20 C4）：只补缺省不覆盖显式值 */
+size_t grad_plan_metadata_fill(airy_task_plan_t *plan);
+
 /* grad_llm_s1_arbiter.c — 模型 B 仲裁域 */
 char *grad_collect_guards(const airy_task_plan_t *plan);
 
