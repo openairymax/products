@@ -184,7 +184,7 @@ static void test_flow(void)
     CHECK(canary_propose(c, &b) == 0);
     CHECK(canary_adopt(c, h1, 0) == -1); /* 非 C2 态不可采纳 */
     CHECK(canary_to_shadow(c) == 0);
-    CHECK(canary_to_canary(c) == 0);
+    CHECK(canary_to_canary(c, 0) == 0);
     CHECK(canary_permille(c) == 100);
     CHECK(canary_step(c, 100) == -2); /* 驻留不足 2h */
     CHECK(canary_step(c, CANARY_DWELL_MS + 1) == 0);
@@ -246,7 +246,7 @@ static void test_rollback(void)
     CHECK(canary_new(&c, root, "ut") == 0);
     b.nfiles = 2;
     CHECK(canary_propose(c, &b) == 0);
-    CHECK(canary_to_shadow(c) == 0 && canary_to_canary(c) == 0);
+    CHECK(canary_to_shadow(c) == 0 && canary_to_canary(c, 0) == 0);
     sha256_buf("v1", 2, h1);
     CHECK(canary_adopt(c, h1, 1) == 0);
     canary_free(c);
@@ -254,7 +254,7 @@ static void test_rollback(void)
     CHECK(canary_new(&c, root, "ut") == 0);
     CHECK(canary_state(c) == CANARY_ST_NONE); /* 新实例态重置 */
     CHECK(canary_propose(c, &b) == 0);
-    CHECK(canary_to_shadow(c) == 0 && canary_to_canary(c) == 0);
+    CHECK(canary_to_shadow(c) == 0 && canary_to_canary(c, 0) == 0);
     sha256_buf("v2", 2, h2);
     CHECK(canary_adopt(c, h2, 2) == 0);
     CHECK(canary_verify(c, h2) == 0);
@@ -312,6 +312,32 @@ static void test_killswitch(const char *root)
     canary_ks_env("");
 }
 
+/* 真实时钟锚定回归：to_canary 以宿主传入时钟为驻留零点，
+ * 防止锚点清零导致首级立即放行的缺陷复发 */
+static void test_dwell_anchor(void)
+{
+    canary_t *c = NULL;
+    canary_blast_t b;
+
+    CHECK(canary_new(&c, "/tmp/ut_dwell", "ut") == 0);
+    b = (canary_blast_t){0};
+    b.module = "ut";
+    b.files = UT_FILES;
+    b.nfiles = 1;
+    b.lines = 10;
+    CHECK(canary_propose(c, &b) == 0);
+    CHECK(canary_to_shadow(c) == 0);
+    CHECK(canary_to_canary(c, 1000) == 0);
+    CHECK(canary_step(c, 1000) == -2);
+    CHECK(canary_step(c, 1000 + CANARY_DWELL_MS - 1) == -2);
+    CHECK(canary_step(c, 1000 + CANARY_DWELL_MS) == 0);
+    CHECK(canary_permille(c) == 500);
+    CHECK(canary_step(c, 1000 + CANARY_DWELL_MS) == -2);
+    CHECK(canary_step(c, 1000 + 2 * CANARY_DWELL_MS) == 0);
+    CHECK(canary_step(c, 1000 + 9 * CANARY_DWELL_MS) == 1);
+    canary_free(c);
+}
+
 static void test_route_sampling(void)
 {
     canary_t *c = NULL;
@@ -327,7 +353,7 @@ static void test_route_sampling(void)
     b.lines = 10;
     CHECK(canary_propose(c, &b) == 0);
     CHECK(canary_to_shadow(c) == 0);
-    CHECK(canary_to_canary(c) == 0);
+    CHECK(canary_to_canary(c, 0) == 0);
     for (salt = 0; salt < 1000u; salt++)
         CHECK(canary_route(c, salt) == (salt < 100u));
     canary_counts(c, &total, &picked);
@@ -346,6 +372,7 @@ int main(void)
     tmp_root(root, sizeof(root));
     test_killswitch(root);
     ut_cleanup(root);
+    test_dwell_anchor();
     test_route_sampling();
 
     if (g_fail != 0) {

@@ -2,7 +2,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later OR Apache-2.0 */
 
 /*
- * canary_sha256.h - FIPS 180-4 SHA-256 紧凑实现（模块私有）。
+ * canary_sha256.h - FIPS 180-4 SHA-256 紧凑实现（公开机制面）。
+ *
+ * 宿主计算 base 指纹须与 manifest 同源：adopt 前经本实现生成
+ * base SHA-256，verify 时以同一算法比对，任一侧换实现即失配。
  */
 #ifndef CANARY_SHA256_H
 #define CANARY_SHA256_H

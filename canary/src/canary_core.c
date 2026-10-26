@@ -126,13 +126,13 @@ int canary_to_shadow(canary_t *c)
     return c ? move(c, CANARY_ST_SHADOW) : -1;
 }
 
-int canary_to_canary(canary_t *c)
+int canary_to_canary(canary_t *c, uint64_t now_ms)
 {
     if (!c)
         return -1;
     if (move(c, CANARY_ST_CANARY) != 0)
         return -1;
-    c->stage_since = 0;
+    c->stage_since = now_ms;
     atomic_store(&c->stage, 0u);
     atomic_store(&c->permille, STAGE_PM[0]);
     return 0;

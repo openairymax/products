@@ -71,7 +71,7 @@ add_library(airy_canary STATIC
     src/canary_manifest.c
     src/canary_sha256.c
     src/canary_internal.h
-    src/canary_sha256.h)
+    include/canary_sha256.h)
 
 target_include_directories(airy_canary
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
