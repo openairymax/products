@@ -103,6 +103,18 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
     cJSON *root = cJSON_Parse(json);
     if (!root)
         return AIRY_ESERVICE;
+
+    /* C1：schema 校验前置——违例整份拒绝（EINVAL），不静默修复。
+     * s2_plan 侧对 EINVAL 走保守 fallback（q8a 语义），修复环不中断；
+     * 缺省元数据（outputs/inputs/cost）由 C4 在构造后推导补全。 */
+    grad_schema_err_t serr;
+    if (grad_plan_schema_validate(root, plan_id, &serr) != AIRY_SUCCESS) {
+        AIRY_LOG_WARN("GRAD-A: plan schema violation (node=%d field=%s reason=%s)",
+                      serr.index, serr.field, serr.reason);
+        cJSON_Delete(root);
+        return AIRY_EINVAL;
+    }
+
     cJSON *nodes = cJSON_GetObjectItem(root, "nodes");
     if (!cJSON_IsArray(nodes)) {
         cJSON_Delete(root);

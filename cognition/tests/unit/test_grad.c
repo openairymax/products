@@ -215,6 +215,12 @@ int main(void)
     RUN_TEST(test_arbiter_malformed_verdicts);
     RUN_TEST(test_grad_role_usage);
     RUN_TEST(test_grad_c11_contract);
+    RUN_TEST(test_schema_valid_full);
+    RUN_TEST(test_schema_optional_metadata);
+    RUN_TEST(test_schema_plan_id);
+    RUN_TEST(test_schema_node_fields);
+    RUN_TEST(test_schema_structure);
+    RUN_TEST(test_schema_inputs);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
            tests_failed);

@@ -30,6 +30,7 @@
 
 #include "grad.h"
 #include "grad_verifier.h"
+#include "plan_schema.h"
 
 #include "logging.h"
 #include "airy_memory.h"

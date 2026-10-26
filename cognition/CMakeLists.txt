@@ -175,6 +175,8 @@ set(COGNITION_SOURCES
     src/grad/grad_llm_s2_plan.c
     src/grad/grad_llm_s1_arbiter.c
     src/grad/grad_run.c
+    # GRAD 计划 schema v1 校验（0.1.20 C1，plan_schema.h 为权威源）
+    src/grad/plan_schema.c
     # MC/TC 认知基座策略载荷（0.1.19 M5-4 §268，自 atoms/coreloopthree
     # src/cognition/think/foundation 迁入；机制核仅留 tc.h/mc.h 契约 +
     # ops 注入表，daemon 侧经 payload_registry 注表）
@@ -476,6 +478,7 @@ if(BUILD_TESTS)
         tests/unit/test_grad_coordinator.c
         tests/unit/test_grad_arbiter.c
         tests/unit/test_grad_misc.c
+        tests/unit/test_grad_schema.c
         ${COG_GRAD_TEST_SRCS})
     target_compile_definitions(test_grad_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
     if(_cog_cjson_libs)
