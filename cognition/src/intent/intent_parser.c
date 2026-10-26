@@ -19,7 +19,6 @@
 
 #include "airy_rt.h"
 #include "cognition.h"
-#include "error_utils.h"
 #include "id_utils.h"
 #include "logging.h"
 
