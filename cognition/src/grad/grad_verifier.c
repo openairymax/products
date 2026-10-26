@@ -6,21 +6,32 @@
  * @brief GRAD deterministic verifier implementation (model C hard-logic
  *        verification, zero generative tokens).
  *
- * Implements three deterministic checks — E-01 causal sufficiency,
- * E-02 deadlock, E-03 resource conservation — plus E-04 invariant_guard
- * counting. Core algorithms:
- *   - Kahn topological sort (E-02 cycle detection + topological order
- *     reused by E-01)
- *   - Type-signature set coverage (E-01, inputs ⊆ ∪ predecessor outputs)
- *   - Per-component cost summation vs budget (E-03)
+ * Implements the five-way deterministic check (0.1.20 C5):
+ *   - E-01 causal sufficiency: Inputs(v_i) ⊆ ∪ Outputs(predecessors),
+ *     three input forms — literal ("lit:" prefix), composite
+ *     "{producer-id}.{artifact}" (producer must be in the transitive
+ *     depends closure and export the artifact), bare signature
+ *     (exact match against the produced set)
+ *   - E-02 deadlock: Kahn topological sort (order reused by E-01)
+ *   - E-03 resource conservation: Σ cost ≤ budget
+ *   - E-04 purpose-drift guard (deterministic, C5): with a goal, every
+ *     invariant_guard node's outputs must overlap the goal keywords
+ *     (bidirectional substring match); goal NULL degrades to counting
+ *   - E-05 metadata coverage (any-semantics): participating nodes with
+ *     incomplete metadata (outputs/cost/input-completeness) fail the
+ *     plan — empty-shell plans can no longer report OK
  *
- * Conservative policy: checks with missing metadata are skipped
- * (tracked by checked_nodes/skipped_nodes).
+ * Every check sets its bit in report->errors; report->error holds the
+ * single highest-priority verdict (E-02 > E-05 > E-01 > E-03 > E-04).
+ * Causal walk checks each node's inputs before merging its own outputs
+ * into the produced set (self-reference cannot pass), and out-of-closure
+ * nodes still donate their outputs (supplier semantics).
  */
 
 #include "grad_verifier.h"
 #include "airy_memory.h"
 #include "string_compat.h"
+#include "text_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -231,117 +242,241 @@ static int grad_kahn_topo(const airy_task_plan_t *plan, int **out_topo_order,
 static int grad_in_closure(const int *closure, size_t closure_count, int idx);
 
 /**
- * @brief E-01 causal sufficiency check: for each node (inside the closure),
- *        inputs ⊆ outputs of all predecessors.
+ * @brief Merge a node's outputs into the produced signature set (dedup).
+ * @return 0 success; -2 ENOMEM (set left intact for cleanup)
+ */
+static int grad_merge_outputs(const airy_task_node_t *node, char ***produced, size_t *count,
+                              size_t *cap)
+{
+    for (size_t o = 0; o < node->task_node_outputs_count; o++) {
+        const char *sig = node->task_node_outputs[o];
+        if (!sig)
+            continue;
+        if (grad_strarr_contains((const char **)*produced, *count, sig))
+            continue;
+        if (*count >= *cap) {
+            size_t new_cap = *cap * 2;
+            char **new_arr = (char **)AIRY_REALLOC(*produced, new_cap * sizeof(char *));
+            if (!new_arr)
+                return -2;
+            *produced = new_arr;
+            *cap = new_cap;
+        }
+        (*produced)[*count] = AIRY_STRDUP(sig);
+        if (!(*produced)[*count])
+            return -2;
+        (*count)++;
+    }
+    return 0;
+}
+
+/**
+ * @brief Transitive depends-closure reachability (BFS, excludes self).
+ * @return 1 reachable; 0 not; -2 ENOMEM
+ */
+static int grad_dep_reachable(const airy_task_plan_t *plan, size_t from_idx, int target_idx)
+{
+    size_t n = plan->task_plan_node_count;
+    int *visited = (int *)AIRY_CALLOC(n, sizeof(int));
+    size_t *queue = (size_t *)AIRY_MALLOC(n * sizeof(size_t));
+    if (!visited || !queue) {
+        if (visited)
+            AIRY_FREE(visited);
+        if (queue)
+            AIRY_FREE(queue);
+        return -2;
+    }
+    size_t head = 0, tail = 0;
+    visited[from_idx] = 1;
+    queue[tail++] = from_idx;
+    int found = 0;
+    while (head < tail && !found) {
+        airy_task_node_t *node = plan->task_plan_nodes[queue[head++]];
+        if (!node)
+            continue;
+        for (size_t d = 0; d < node->task_node_depends_count; d++) {
+            int pi = grad_find_node_index(plan, node->task_node_depends_on[d]);
+            if (pi < 0 || visited[pi])
+                continue;
+            if (pi == target_idx) {
+                found = 1;
+                break;
+            }
+            visited[pi] = 1;
+            queue[tail++] = (size_t)pi;
+        }
+    }
+    AIRY_FREE(visited);
+    AIRY_FREE(queue);
+    return found;
+}
+
+/**
+ * @brief Find the node whose id equals input[0..pid_len) (producer prefix).
+ * @return node index; -1 not found
+ */
+static int grad_find_producer_index(const airy_task_plan_t *plan, const char *input,
+                                    size_t pid_len)
+{
+    for (size_t i = 0; i < plan->task_plan_node_count; i++) {
+        airy_task_node_t *node = plan->task_plan_nodes[i];
+        if (!node || !node->task_node_id)
+            continue;
+        if (strncmp(node->task_node_id, input, pid_len) == 0 &&
+            node->task_node_id[pid_len] == '\0')
+            return (int)i;
+    }
+    return -1;
+}
+
+/**
+ * @brief E-01 single-input judgment (three forms).
  *
- * Maintains the "produced signature set" (union of all predecessor
- * outputs) along topological order and checks that every input of
- * closure nodes is covered. Strict judgment applies only to closure
- * nodes with complete input metadata; out-of-closure nodes are treated
- * as "proven theorems" and skipped (differential entropy reduction).
+ *   - "lit:" prefix: literal value, exempt (always satisfied)
+ *   - "{pid}.{name}": producer must be in the current node's transitive
+ *     depends closure (a node cannot consume its own artifact — the
+ *     declared-dependency graph and the dataflow graph must agree) and
+ *     its outputs must contain the exact artifact name
+ *   - bare signature: exact match in the produced set
+ *
+ * @return 1 satisfied; 0 causal break; -2 ENOMEM
+ */
+static int grad_input_satisfied(const airy_task_plan_t *plan, size_t node_idx, const char *input,
+                                const char **produced, size_t produced_count)
+{
+    if (strncmp(input, "lit:", 4) == 0)
+        return 1;
+    const char *dot = strchr(input, '.');
+    if (dot && dot != input) {
+        size_t pid_len = (size_t)(dot - input);
+        int prod_idx = grad_find_producer_index(plan, input, pid_len);
+        if (prod_idx < 0)
+            return 0;
+        int reach = grad_dep_reachable(plan, node_idx, prod_idx);
+        if (reach <= 0)
+            return (reach == 0) ? 0 : -2;
+        airy_task_node_t *producer = plan->task_plan_nodes[prod_idx];
+        const char *name = dot + 1;
+        for (size_t o = 0; o < producer->task_node_outputs_count; o++) {
+            if (producer->task_node_outputs[o] &&
+                strcmp(producer->task_node_outputs[o], name) == 0)
+                return 1;
+        }
+        return 0;
+    }
+    return grad_strarr_contains(produced, produced_count, input);
+}
+
+/**
+ * @brief E-01 causal sufficiency check (0.1.20 C5 rewrite).
+ *
+ * Walks the topological order. Each participating node is checked
+ * BEFORE its own outputs join the produced set — a self-referential
+ * plan can no longer satisfy its inputs from itself. Out-of-closure
+ * nodes are not checked (differential entropy reduction) but still
+ * donate their outputs (supplier semantics). Empty-input nodes count
+ * as trivially checked (metadata completeness is E-05's domain).
+ * All participating nodes are visited even after a break (the first
+ * break fills the report detail); causal_checked therefore equals the
+ * participating-set size and E-05 is driven solely by metadata_ok.
  *
  * @param plan [in] Task plan
  * @param topo [in] Topological-order node index array
  * @param topo_count [in] Topological-order length
  * @param closure [in] Differential closure (NULL = full verification)
  * @param closure_count [in] Closure size
- * @param report [out] Report (fills E-01 result)
- * @return 0 pass/skip; -1 logic break found (report filled)
+ * @param report [out] Report (fills errors bit, causal_checked, metadata_ok)
+ * @return 0 pass; -1 causal break (report filled); -2 ENOMEM
  */
 static int grad_check_causal(const airy_task_plan_t *plan, const int *topo, size_t topo_count,
                              const int *closure, size_t closure_count, airy_grad_report_t *report)
 {
-
     size_t prod_cap = 32;
     char **produced = (char **)AIRY_CALLOC(prod_cap, sizeof(char *));
     if (!produced)
         return -2;
     size_t produced_count = 0;
-
     int result = 0;
 
-    for (size_t t = 0; t < topo_count && result == 0; t++) {
+    for (size_t t = 0; t < topo_count; t++) {
         airy_task_node_t *node = plan->task_plan_nodes[topo[t]];
         if (!node)
             continue;
 
-        if (node->task_node_outputs && node->task_node_outputs_count > 0) {
-            for (size_t o = 0; o < node->task_node_outputs_count; o++) {
-                const char *sig = node->task_node_outputs[o];
-                if (!sig)
-                    continue;
-                if (!grad_strarr_contains((const char **)produced, produced_count, sig)) {
-                    if (produced_count >= prod_cap) {
-                        size_t new_cap = prod_cap * 2;
-                        char **new_arr = (char **)AIRY_REALLOC(produced, new_cap * sizeof(char *));
-                        if (!new_arr) {
-                            for (size_t k = 0; k < produced_count; k++)
-                                AIRY_FREE(produced[k]);
-                            AIRY_FREE(produced);
-                            return -2;
-                        }
-                        produced = new_arr;
-                        prod_cap = new_cap;
-                    }
-                    produced[produced_count] = AIRY_STRDUP(sig);
-                    if (produced[produced_count])
-                        produced_count++;
-                }
-            }
-        }
-
         if (closure && closure_count > 0 && !grad_in_closure(closure, closure_count, topo[t])) {
+            /* 闭包外供体：不检查，但 outputs 并入 produced（供体语义） */
+            if (grad_merge_outputs(node, &produced, &produced_count, &prod_cap) == -2) {
+                result = -2;
+                break;
+            }
             report->skipped_nodes++;
             continue;
         }
 
-        if (!node->task_node_inputs || node->task_node_inputs_count == 0) {
-            report->skipped_nodes++;
-            continue;
-        }
-        report->checked_nodes++;
-
+        report->causal_checked++;
         for (size_t i = 0; i < node->task_node_inputs_count; i++) {
             const char *input_sig = node->task_node_inputs[i];
             if (!input_sig)
                 continue;
-            if (!grad_strarr_contains((const char **)produced, produced_count, input_sig)) {
-
-                snprintf(report->affected_node, sizeof(report->affected_node), "%s",
-                         node->task_node_id ? node->task_node_id : "?");
-                snprintf(report->missing_artifact, sizeof(report->missing_artifact), "%s",
-                         input_sig);
-                report->error = AIRY_GRAD_E01_CAUSAL_BREAK;
+            int sat = grad_input_satisfied(plan, topo[t], input_sig,
+                                           (const char **)produced, produced_count);
+            if (sat == -2) {
+                result = -2;
+                break;
+            }
+            if (sat == 0) {
+                if (!(report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E01_CAUSAL_BREAK))) {
+                    snprintf(report->affected_node, sizeof(report->affected_node), "%s",
+                             node->task_node_id ? node->task_node_id : "?");
+                    snprintf(report->missing_artifact, sizeof(report->missing_artifact), "%s",
+                             input_sig);
+                    report->errors |= AIRY_GRAD_ERR_BIT(AIRY_GRAD_E01_CAUSAL_BREAK);
+                }
                 result = -1;
                 break;
             }
+        }
+        if (result == -2)
+            break;
+
+        /* metadata_ok（E-05 覆盖统计，参与集内）：产出非空 ∧ 有成本信息
+         * ∧ 输入完备（无依赖免输入；有依赖必须声明 inputs，堵
+         * "依赖声明/数据流两张皮"）。 */
+        if (node->task_node_outputs_count > 0 &&
+            (node->task_node_cost_time_ms > 0 || node->task_node_cost_mem_mb > 0) &&
+            (node->task_node_depends_count == 0 || node->task_node_inputs_count > 0))
+            report->metadata_ok++;
+
+        if (grad_merge_outputs(node, &produced, &produced_count, &prod_cap) == -2) {
+            result = -2;
+            break;
         }
     }
 
     for (size_t k = 0; k < produced_count; k++)
         AIRY_FREE(produced[k]);
     AIRY_FREE(produced);
+    report->checked_nodes = report->causal_checked; /* 兼容别名 */
     return result;
 }
 
 /**
- * @brief E-03 resource conservation check: Σ cost(v_i) ≤ R_total (per component).
+ * @brief E-03 resource conservation check: Σ cost(v_i) ≤ R_total.
  *
  * Sums only nodes with cost > 0 (cost=0 is treated as unknown; excluded
- * from the sum but counted as skipped).
+ * from the sum, counted separately as cost_checked/unknown). The E-01
+ * counter checked_nodes is no longer polluted (0.1.20 C5).
  *
  * @param plan [in] Task plan
  * @param budget [in] Resource budget
- * @param report [out] Report (fills E-03 result)
+ * @param report [out] Report (fills errors bit, cost_checked, cost sums)
  * @return 0 pass/skip; -1 over budget (report filled)
  */
 static int grad_check_resource(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
                                airy_grad_report_t *report)
 {
-    if (!budget || (budget->time_ms <= 0 && budget->mem_mb <= 0)) {
-
+    if (!budget || (budget->time_ms <= 0 && budget->mem_mb <= 0))
         return 0;
-    }
 
     int64_t sum_ms = 0, sum_mb = 0;
     uint32_t costed_nodes = 0, unknown_nodes = 0;
@@ -364,26 +499,16 @@ static int grad_check_resource(const airy_task_plan_t *plan, const airy_grad_bud
 
     report->cost_sum_ms = sum_ms;
     report->cost_sum_mb = sum_mb;
-    report->checked_nodes += costed_nodes;
+    report->cost_checked = costed_nodes;
     report->skipped_nodes += unknown_nodes;
 
-    if (budget->time_ms > 0 && sum_ms > budget->time_ms) {
+    if ((budget->time_ms > 0 && sum_ms > budget->time_ms) ||
+        (budget->mem_mb > 0 && sum_mb > budget->mem_mb)) {
         snprintf(report->affected_node, sizeof(report->affected_node), "aggregate");
-        report->error = AIRY_GRAD_E03_RESOURCE_OVER;
-        return -1;
-    }
-    if (budget->mem_mb > 0 && sum_mb > budget->mem_mb) {
-        snprintf(report->affected_node, sizeof(report->affected_node), "aggregate");
-        report->error = AIRY_GRAD_E03_RESOURCE_OVER;
+        report->errors |= AIRY_GRAD_ERR_BIT(AIRY_GRAD_E03_RESOURCE_OVER);
         return -1;
     }
     return 0;
-}
-
-airy_err_t airy_grad_verify_plan(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
-                                 airy_grad_report_t *report)
-{
-    return airy_grad_verify_scope(plan, budget, NULL, 0, report);
 }
 
 static int grad_in_closure(const int *closure, size_t closure_count, int idx)
@@ -481,9 +606,73 @@ static int grad_compute_closure(const airy_task_plan_t *plan, const char *const 
     return 0;
 }
 
-airy_err_t airy_grad_verify_scope(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
-                                  const char *const *scope_nodes, size_t scope_count,
-                                  airy_grad_report_t *report)
+/**
+ * @brief E-04 purpose-drift guard check (deterministic, 0.1.20 C5).
+ *
+ * Extracts lowercased keywords from the goal endpoint text and requires
+ * every invariant_guard node's outputs to share entity overlap with at
+ * least one keyword (bidirectional substring match). A guard node whose
+ * outputs mention nothing the goal mentions protects entities the goal
+ * never asked for — purpose drift. Without a goal (or without keywords
+ * or guard nodes) the check is not applicable: guard_state = NONE, and
+ * only invariant_guards counting remains (semantic layer B still owns
+ * the fine-grained e04=pass|fail verdict).
+ *
+ * Whole-graph domain (E-03 alike): drift is a plan-level property, so
+ * scope mode still inspects every guard node (fail-closed).
+ */
+#define GUARD_KW_MAX 24
+
+static void grad_check_guard(const airy_task_plan_t *plan, const airy_gccp_goal_t *goal,
+                             airy_grad_report_t *report)
+{
+    report->guard_state = AIRY_GRAD_GUARD_NONE;
+    if (!goal || !goal->goal_endpoint || report->invariant_guards == 0)
+        return;
+    char *keywords[GUARD_KW_MAX];
+    size_t kw_count = airy_text_keywords(goal->goal_endpoint, keywords, GUARD_KW_MAX);
+    if (kw_count == 0)
+        return;
+    int fail = 0;
+    for (size_t i = 0; i < plan->task_plan_node_count && !fail; i++) {
+        airy_task_node_t *node = plan->task_plan_nodes[i];
+        if (!node || !node->task_node_invariant_guard)
+            continue;
+        int overlap = 0;
+        for (size_t o = 0; o < node->task_node_outputs_count && !overlap; o++) {
+            const char *sig = node->task_node_outputs[o];
+            if (!sig || !sig[0])
+                continue;
+            for (size_t k = 0; k < kw_count; k++) {
+                if (strstr(sig, keywords[k]) || strstr(keywords[k], sig)) {
+                    overlap = 1;
+                    break;
+                }
+            }
+        }
+        if (!overlap) {
+            snprintf(report->affected_node, sizeof(report->affected_node), "%s",
+                     node->task_node_id ? node->task_node_id : "?");
+            report->errors |= AIRY_GRAD_ERR_BIT(AIRY_GRAD_E04_GUARD_DRIFT);
+            fail = 1;
+        }
+    }
+    airy_text_kw_free(keywords, kw_count);
+    report->guard_state = fail ? AIRY_GRAD_GUARD_FAIL : AIRY_GRAD_GUARD_PASS;
+}
+
+/**
+ * @brief Shared verification pipeline (full or scope, with optional goal).
+ *
+ * Execution order E-02 → E-01 → E-03 → E-04 → E-05 fills the errors
+ * bitmap and the report detail of the first hit; the single-value
+ * verdict is then chosen by priority E-02 > E-05 > E-01 > E-03 > E-04
+ * (metadata completeness gates causal judgment — complete the metadata
+ * first, then judge causality).
+ */
+static airy_err_t grad_verify_impl(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
+                                   const airy_gccp_goal_t *goal, const char *const *scope_nodes,
+                                   size_t scope_count, airy_grad_report_t *report)
 {
     if (!plan || !report)
         return AIRY_EINVAL;
@@ -505,6 +694,7 @@ airy_err_t airy_grad_verify_scope(const airy_task_plan_t *plan, const airy_grad_
     if (kahn_ret == -2)
         return AIRY_ENOMEM;
     if (kahn_ret == -1) {
+        report->errors |= AIRY_GRAD_ERR_BIT(AIRY_GRAD_E02_DEADLOCK);
         report->error = AIRY_GRAD_E02_DEADLOCK;
         return AIRY_SUCCESS;
     }
@@ -531,35 +721,68 @@ airy_err_t airy_grad_verify_scope(const airy_task_plan_t *plan, const airy_grad_
             AIRY_FREE(closure);
         return AIRY_ENOMEM;
     }
-    if (causal_ret == -1) {
-        if (closure)
-            AIRY_FREE(closure);
 
-        return AIRY_SUCCESS;
+    grad_check_resource(plan, budget, report);
+    grad_check_guard(plan, goal, report);
+
+    /* E-05 元数据覆盖（any 语义，J-05 等式）：参与集内任一节点元数据
+     * 不全即拒。因果遍历恒全覆盖参与集，causal 侧条件防御保留。 */
+    size_t participating = 0;
+    if (closure) {
+        participating = closure_count;
+    } else {
+        for (size_t i = 0; i < plan->task_plan_node_count; i++)
+            if (plan->task_plan_nodes[i])
+                participating++;
+    }
+    if (report->causal_checked < participating || report->metadata_ok < participating) {
+        report->errors |= AIRY_GRAD_ERR_BIT(AIRY_GRAD_E05_VERIFY_INSUFFICIENT);
+        if (report->affected_node[0] == '\0')
+            snprintf(report->affected_node, sizeof(report->affected_node), "all");
     }
     if (closure)
         AIRY_FREE(closure);
 
-    int res_ret = grad_check_resource(plan, budget, report);
-    if (res_ret == -1) {
-
-        return AIRY_SUCCESS;
-    }
-
-    /* E-05 verification-insufficient (false-convergence defense): a
-     * non-empty plan where no node was strictly checked (all inputs/outputs/
-     * cost metadata absent) must not report OK. Previously such an
-     * "empty-shell" LLM plan skipped every E-01/E-03 check, produced
-     * checked_nodes=0, and still converged — the gate accepted a plan it
-     * never verified. Reject so model A must fill metadata (patch E-05). */
-    if (plan->task_plan_node_count > 0 && report->checked_nodes == 0) {
-        snprintf(report->affected_node, sizeof(report->affected_node), "all");
+    if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E02_DEADLOCK))
+        report->error = AIRY_GRAD_E02_DEADLOCK;
+    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E05_VERIFY_INSUFFICIENT))
         report->error = AIRY_GRAD_E05_VERIFY_INSUFFICIENT;
-        return AIRY_SUCCESS;
-    }
+    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E01_CAUSAL_BREAK))
+        report->error = AIRY_GRAD_E01_CAUSAL_BREAK;
+    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E03_RESOURCE_OVER))
+        report->error = AIRY_GRAD_E03_RESOURCE_OVER;
+    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E04_GUARD_DRIFT))
+        report->error = AIRY_GRAD_E04_GUARD_DRIFT;
+    else
+        report->error = AIRY_GRAD_OK;
 
-    report->error = AIRY_GRAD_OK;
     return AIRY_SUCCESS;
+}
+
+airy_err_t airy_grad_verify_plan_g(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
+                                   const airy_gccp_goal_t *goal, airy_grad_report_t *report)
+{
+    return grad_verify_impl(plan, budget, goal, NULL, 0, report);
+}
+
+airy_err_t airy_grad_verify_plan(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
+                                 airy_grad_report_t *report)
+{
+    return airy_grad_verify_plan_g(plan, budget, NULL, report);
+}
+
+airy_err_t airy_grad_verify_scope_g(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
+                                    const airy_gccp_goal_t *goal, const char *const *scope_nodes,
+                                    size_t scope_count, airy_grad_report_t *report)
+{
+    return grad_verify_impl(plan, budget, goal, scope_nodes, scope_count, report);
+}
+
+airy_err_t airy_grad_verify_scope(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
+                                  const char *const *scope_nodes, size_t scope_count,
+                                  airy_grad_report_t *report)
+{
+    return airy_grad_verify_scope_g(plan, budget, NULL, scope_nodes, scope_count, report);
 }
 
 const char *airy_grad_error_str(airy_grad_error_t err)
@@ -574,7 +797,9 @@ const char *airy_grad_error_str(airy_grad_error_t err)
     case AIRY_GRAD_E03_RESOURCE_OVER:
         return "E-03 resource overrun: aggregate cost exceeds budget";
     case AIRY_GRAD_E05_VERIFY_INSUFFICIENT:
-        return "E-05 verify insufficient: no node carries checkable metadata";
+        return "E-05 verify insufficient: node metadata incomplete in participating set";
+    case AIRY_GRAD_E04_GUARD_DRIFT:
+        return "E-04 purpose drift: guard node outputs share no overlap with goal";
     default:
         return "UNKNOWN";
     }
@@ -600,6 +825,11 @@ airy_err_t airy_grad_report_to_json(const airy_grad_report_t *report, char **out
     cJSON_AddNumberToObject(root, "checked_nodes", (double)report->checked_nodes);
     cJSON_AddNumberToObject(root, "skipped_nodes", (double)report->skipped_nodes);
     cJSON_AddNumberToObject(root, "invariant_guards", (double)report->invariant_guards);
+    cJSON_AddNumberToObject(root, "errors", (double)report->errors);
+    cJSON_AddNumberToObject(root, "causal_checked", (double)report->causal_checked);
+    cJSON_AddNumberToObject(root, "cost_checked", (double)report->cost_checked);
+    cJSON_AddNumberToObject(root, "metadata_ok", (double)report->metadata_ok);
+    cJSON_AddNumberToObject(root, "guard_state", (double)report->guard_state);
     char *json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!json)
@@ -608,18 +838,22 @@ airy_err_t airy_grad_report_to_json(const airy_grad_report_t *report, char **out
     return AIRY_SUCCESS;
 #else
 
-    size_t cap = 512;
+    size_t cap = 768;
     char *buf = (char *)AIRY_MALLOC(cap);
     if (!buf)
         return AIRY_ENOMEM;
     int n = snprintf(buf, cap,
                      "{\"error\":%d,\"error_desc\":\"%s\",\"affected_node\":\"%s\","
                      "\"cost_sum_ms\":%lld,\"cost_sum_mb\":%lld,\"checked_nodes\":%u,"
-                     "\"skipped_nodes\":%u,\"invariant_guards\":%u}",
+                     "\"skipped_nodes\":%u,\"invariant_guards\":%u,\"errors\":%u,"
+                     "\"causal_checked\":%u,\"cost_checked\":%u,\"metadata_ok\":%u,"
+                     "\"guard_state\":%u}",
                      (int)report->error, airy_grad_error_str(report->error), report->affected_node,
                      (long long)report->cost_sum_ms, (long long)report->cost_sum_mb,
                      (unsigned)report->checked_nodes, (unsigned)report->skipped_nodes,
-                     (unsigned)report->invariant_guards);
+                     (unsigned)report->invariant_guards, (unsigned)report->errors,
+                     (unsigned)report->causal_checked, (unsigned)report->cost_checked,
+                     (unsigned)report->metadata_ok, (unsigned)report->guard_state);
     if (n <= 0 || (size_t)n >= cap) {
         AIRY_FREE(buf);
         return AIRY_EUNKNOWN;

@@ -22,8 +22,10 @@ airy_task_plan_t *make_seed_single(const char *id, const char *plan_id)
         AIRY_FREE(seed);
         return NULL;
     }
+    /* C5 any 语义：单节点 seed 须元数据完备，否则 verify 门 E-05 恒拒。 */
+    const char *seed_out[] = {"seed.done"};
     seed->task_plan_nodes[seed->task_plan_node_count++] =
-        make_node(id, "execute", "executor", NULL, 0, NULL, 0, 10, 0);
+        make_node(id, "execute", "executor", NULL, 0, seed_out, 1, 10, 0);
     seed->task_plan_entry_points = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (seed->task_plan_entry_points) {
         seed->task_plan_entry_points[0] = AIRY_STRDUP(id);
@@ -92,12 +94,13 @@ void run_arb_verdict(const char *verdict_json, int expect_fix_loop, const char *
 
 void test_arbiter_conf_degrade(void)
 {
-    /* 有效 seed（单节点，E-01/E-02/E-03 全过）*/
+    /* 有效 seed（单节点，E-01/E-02/E-03/E-05 全过）*/
+    const char *conf_out[] = {"s01.done"};
     airy_task_plan_t *seed = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
     seed->task_plan_id = AIRY_STRDUP("seed_conf");
     seed->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
     seed->task_plan_nodes[seed->task_plan_node_count++] =
-        make_node("S_01", "execute", "executor", NULL, 0, NULL, 0, 10, 0);
+        make_node("S_01", "execute", "executor", NULL, 0, conf_out, 1, 10, 0);
     seed->task_plan_entry_points = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (seed->task_plan_entry_points) {
         seed->task_plan_entry_points[0] = AIRY_STRDUP("S_01");
@@ -171,12 +174,14 @@ void test_arbiter_conf_degrade(void)
 
 void test_arbiter_e04_purpose_drift(void)
 {
-    /* seed 含 invariant_guard 节点（S_01 guard=1），E-01/E-02/E-03 全过 */
+    /* seed 含 invariant_guard 节点（S_01 guard=1），E-01/E-02/E-03/E-05
+     * 全过；goal=NULL → 确定性 E-04 降级为 guard 计数，判据归语义层 B。 */
+    const char *e04_out[] = {"s01.done"};
     airy_task_plan_t *seed = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
     seed->task_plan_id = AIRY_STRDUP("seed_e04");
     seed->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
     seed->task_plan_nodes[seed->task_plan_node_count++] =
-        make_node("S_01", "execute", "executor", NULL, 0, NULL, 0, 10, 1);
+        make_node("S_01", "execute", "executor", NULL, 0, e04_out, 1, 10, 1);
     seed->task_plan_entry_points = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (seed->task_plan_entry_points) {
         seed->task_plan_entry_points[0] = AIRY_STRDUP("S_01");

@@ -200,9 +200,11 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
                      delta_scope ? delta_scope : "full");
             grad_progress(coord, 0, "grad_verify_start", pb);
         }
-        err = airy_grad_verify_scope(plan, &coord->config.budget,
-                                     delta_scope ? (const char *const *)&delta_scope : NULL,
-                                     delta_scope ? 1 : 0, &report);
+        /* C5（0.1.20）：透传 goal，启用确定性 E-04 purpose-drift 守卫
+         * （guard 节点 outputs 与 goal 关键词实体交集判定）。 */
+        err = airy_grad_verify_scope_g(plan, &coord->config.budget, goal,
+                                       delta_scope ? (const char *const *)&delta_scope : NULL,
+                                       delta_scope ? 1 : 0, &report);
         if (err != AIRY_SUCCESS && err != AIRY_EINVAL) {
             AIRY_LOG_WARN("GRAD: verify failed (err=%d), aborting loop", (int)err);
             loop_err = err;
@@ -249,6 +251,11 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             coord->stats.rejections++;
             break;
         case AIRY_GRAD_E05_VERIFY_INSUFFICIENT:
+            coord->stats.e05_count++;
+            coord->stats.rejections++;
+            break;
+        case AIRY_GRAD_E04_GUARD_DRIFT:
+            coord->stats.e04_count++;
             coord->stats.rejections++;
             break;
         default:
@@ -556,6 +563,9 @@ airy_err_t airy_grad_build_patch(const airy_grad_report_t *report, uint32_t iter
     case AIRY_GRAD_E05_VERIFY_INSUFFICIENT:
         code = "E-05";
         break;
+    case AIRY_GRAD_E04_GUARD_DRIFT:
+        code = "E-04";
+        break;
     default:
         break;
     }
@@ -573,6 +583,9 @@ airy_err_t airy_grad_build_patch(const airy_grad_report_t *report, uint32_t iter
         break;
     case AIRY_GRAD_E05_VERIFY_INSUFFICIENT:
         suggestion = "fill inputs/outputs/cost metadata for every node";
+        break;
+    case AIRY_GRAD_E04_GUARD_DRIFT:
+        suggestion = "realign guard node outputs with the goal entities";
         break;
     default:
         break;

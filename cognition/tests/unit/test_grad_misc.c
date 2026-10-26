@@ -90,15 +90,17 @@ void test_edge_cases(void)
     }
     free_plan(empty);
 
+    const char *ig_out[] = {"s01.done"};
     airy_task_plan_t *ig = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
     ig->task_plan_id = AIRY_STRDUP("ig_plan");
     ig->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
     ig->task_plan_nodes[ig->task_plan_node_count++] =
-        make_node("S_01", "guard", "executor", NULL, 0, NULL, 0, 10, 1);
+        make_node("S_01", "guard", "executor", NULL, 0, ig_out, 1, 10, 1);
     __builtin_memset(&report, 0, sizeof(report));
     airy_grad_budget_t ig_budget = {600000, 1024};
     err = airy_grad_verify_plan(ig, &ig_budget, &report);
-    if (err == AIRY_SUCCESS && report.invariant_guards == 1) {
+    if (err == AIRY_SUCCESS && report.error == AIRY_GRAD_OK &&
+        report.guard_state == AIRY_GRAD_GUARD_NONE && report.invariant_guards == 1) {
         TEST_PASS("invariant_guard counted for semantic review");
     } else {
         char msg[128];
@@ -246,11 +248,14 @@ void test_grad_role_usage(void)
 
 void test_progress_events(void)
 {
+    /* C5 any 语义：seed 节点须元数据完备，否则 verify 门 E-05 恒拒，
+     * done 事件永不触发。 */
+    const char *seed_out[] = {"s01.done"};
     airy_task_plan_t *seed = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
     seed->task_plan_id = AIRY_STRDUP("seed");
     seed->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
     seed->task_plan_nodes[seed->task_plan_node_count++] =
-        make_node("S_01", "execute", "executor", NULL, 0, NULL, 0, 10, 0);
+        make_node("S_01", "execute", "executor", NULL, 0, seed_out, 1, 10, 0);
     seed->task_plan_entry_points = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (seed->task_plan_entry_points) {
         seed->task_plan_entry_points[0] = AIRY_STRDUP("S_01");

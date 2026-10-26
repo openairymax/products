@@ -13,10 +13,13 @@ void test_coordinator_seed_converge(void)
 {
 
     airy_task_plan_t *seed = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
+    /* C5 any 语义：seed 节点须元数据完备（outputs+cost），否则 verify
+     * 门 E-05 恒拒，协调器路径无法收敛。 */
+    const char *seed_out[] = {"s01.done"};
     seed->task_plan_id = AIRY_STRDUP("seed");
     seed->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
     seed->task_plan_nodes[seed->task_plan_node_count++] =
-        make_node("S_01", "execute", "executor", NULL, 0, NULL, 0, 10, 0);
+        make_node("S_01", "execute", "executor", NULL, 0, seed_out, 1, 10, 0);
     seed->task_plan_entry_points = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (seed->task_plan_entry_points) {
         seed->task_plan_entry_points[0] = AIRY_STRDUP("S_01");
