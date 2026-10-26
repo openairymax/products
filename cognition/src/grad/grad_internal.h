@@ -347,6 +347,62 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
 /* plan_metadata.c — 缺省元数据推导（0.1.20 C4）：只补缺省不覆盖显式值 */
 size_t grad_plan_metadata_fill(airy_task_plan_t *plan);
 
+/* grad_patch.c — C6 增量修补域（0.1.20 §5.2b.3）：
+ * B 驳回缺陷 → Δk 修补 scope → 计划合并 → 合并产物序列化复验 */
+
+/** @brief 单条缺陷（B_Model verdict defects[] 元素）。 */
+typedef struct grad_defect {
+    char node_id[GRAD_NODE_ID_MAX + 1];
+    char code[8];        /**< "E-01"~"E-04"（C2 契约枚举内） */
+    char evidence[256];
+    char suggestion[256];
+} grad_defect_t;
+
+/** @brief Δk 修补闭包上界：min(本值, ceil(N/2))，超界整份重绘。 */
+#define GRAD_PATCH_MAX_NODES 8
+
+/**
+ * @brief 计算 Δk 修补 scope：unique(defects.node_id) 经一阶闭包上界裁定。
+ *
+ * scope 空 / defect 节点不在计划内 → AIRY_EINVAL（G55：模板 patch 不重绘）；
+ * 闭包超界 → AIRY_E2BIG（调用方整份重绘 repair_mode=full）。
+ *
+ * @param out_closure_size [out] 一阶闭包实际大小（可为 NULL）
+ * @ownership out_scope: OWNER（调用方 AIRY_FREE 顶层与元素）
+ */
+airy_err_t grad_patch_scope(const airy_task_plan_t *plan, const grad_defect_t *defects,
+                            size_t defect_count, char ***out_scope, size_t *out_count,
+                            size_t *out_closure_size);
+
+/**
+ * @brief 构建 B_Model 增量修补 patch JSON（repair_mode=incremental）。
+ *
+ * @ownership out_json: OWNER（调用方 AIRY_FREE）
+ */
+airy_err_t grad_patch_build(uint32_t iteration, const grad_defect_t *defects,
+                            size_t defect_count, const char *const *scope,
+                            size_t scope_count, char **out_json);
+
+/**
+ * @brief 合并 sub（模型 A 修补产物）到 plan：scope 内整节点替换，
+ *        frozen 逐字段精确相等，sub 新节点仅限 scope（E-01 插入生产者）。
+ *
+ * frozen 篡改 → AIRY_ERR_STATE_ERROR（patch_inconsistent，本轮作废）；
+ * 越权新节点 → AIRY_EINVAL；entry points 合并后重算（无依赖节点）。
+ *
+ * @ownership out_merged: OWNER（调用方 airy_task_plan_free）
+ */
+airy_err_t grad_plan_merge(const airy_task_plan_t *plan, const airy_task_plan_t *sub,
+                           const char *const *scope, size_t scope_count,
+                           airy_task_plan_t **out_merged);
+
+/**
+ * @brief 序列化计划为 schema v1 视图 JSON（合并产物复验与决策链日志）。
+ *
+ * @ownership out_json: OWNER（调用方 AIRY_FREE）
+ */
+airy_err_t grad_plan_to_json(const airy_task_plan_t *plan, char **out_json);
+
 /* grad_llm_s1_arbiter.c — 模型 B 仲裁域 */
 char *grad_collect_guards(const airy_task_plan_t *plan);
 

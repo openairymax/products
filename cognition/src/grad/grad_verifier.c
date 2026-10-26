@@ -473,7 +473,7 @@ static int grad_check_causal(const airy_task_plan_t *plan, const int *topo, size
  * @return 0 pass/skip; -1 over budget (report filled)
  */
 static int grad_check_resource(const airy_task_plan_t *plan, const airy_grad_budget_t *budget,
-                               airy_grad_report_t *report)
+                               const int *closure, size_t closure_count, airy_grad_report_t *report)
 {
     if (!budget || (budget->time_ms <= 0 && budget->mem_mb <= 0))
         return 0;
@@ -482,6 +482,11 @@ static int grad_check_resource(const airy_task_plan_t *plan, const airy_grad_bud
     uint32_t costed_nodes = 0, unknown_nodes = 0;
 
     for (size_t i = 0; i < plan->task_plan_node_count; i++) {
+        /* F9（0.1.20 C6）：差分模式下 E-03 只累计闭包内节点的资源——
+         * 闭包外节点视为已证定理（§2.5 微分熵减），其成本已在上轮
+         * 预算判定中结清，重复累计会令小修补被全图旧账误判超限。 */
+        if (closure && !grad_in_closure(closure, closure_count, (int)i))
+            continue;
         airy_task_node_t *node = plan->task_plan_nodes[i];
         if (!node)
             continue;
@@ -537,10 +542,25 @@ static int grad_in_closure(const int *closure, size_t closure_count, int idx)
  * @param scope_count [in] Number of changed nodes
  * @param out_closure [out] Closure node index array (AIRY_MALLOC, caller frees)
  * @param out_count [out] Closure size
- * @return 0 success; -1 invalid arguments
+ * @return 0 success; -1 invalid arguments; -2 ENOMEM
  */
-static int grad_compute_closure(const airy_task_plan_t *plan, const char *const *scope_nodes,
+static int grad_closure_impl(const airy_task_plan_t *plan, const char *const *scope_nodes,
+                             size_t scope_count, int **out_closure, size_t *out_count);
+
+airy_err_t grad_compute_closure(const airy_task_plan_t *plan, const char *const *scope_nodes,
                                 size_t scope_count, int **out_closure, size_t *out_count)
+{
+    if (!plan || !out_closure || !out_count)
+        return AIRY_EINVAL;
+    *out_closure = NULL;
+    *out_count = 0;
+    return grad_closure_impl(plan, scope_nodes, scope_count, out_closure, out_count) == 0
+               ? AIRY_SUCCESS
+               : AIRY_ENOMEM;
+}
+
+static int grad_closure_impl(const airy_task_plan_t *plan, const char *const *scope_nodes,
+                             size_t scope_count, int **out_closure, size_t *out_count)
 {
     size_t n = plan->task_plan_node_count;
     if (n == 0) {
@@ -702,10 +722,11 @@ static airy_err_t grad_verify_impl(const airy_task_plan_t *plan, const airy_grad
     int *closure = NULL;
     size_t closure_count = 0;
     if (scope_nodes && scope_count > 0) {
-        int cl_ret = grad_compute_closure(plan, scope_nodes, scope_count, &closure, &closure_count);
-        if (cl_ret == -2) {
+        airy_err_t cl_ret =
+            grad_compute_closure(plan, scope_nodes, scope_count, &closure, &closure_count);
+        if (cl_ret != AIRY_SUCCESS) {
             AIRY_FREE(topo);
-            return AIRY_ENOMEM;
+            return cl_ret;
         }
 
         if (closure_count == 0) {
@@ -722,7 +743,7 @@ static airy_err_t grad_verify_impl(const airy_task_plan_t *plan, const airy_grad
         return AIRY_ENOMEM;
     }
 
-    grad_check_resource(plan, budget, report);
+    grad_check_resource(plan, budget, closure, closure_count, report);
     grad_check_guard(plan, goal, report);
 
     /* E-05 元数据覆盖（any 语义，J-05 等式）：参与集内任一节点元数据
