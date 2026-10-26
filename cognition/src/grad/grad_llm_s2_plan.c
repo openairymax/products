@@ -354,8 +354,8 @@ airy_err_t grad_llm_s2_plan(const airy_gccp_goal_t *goal, const char *patch_json
 
     char *plan_json = NULL;
     size_t plan_json_len = 0;
-    airy_err_t err = grad_llm_call(ctx, GRAD_S2_SYSTEM_PROMPT, prompt, ctx->s2_model, &plan_json,
-                                   &plan_json_len);
+    airy_err_t err = grad_llm_call(ctx, GRAD_S2_SYSTEM_PROMPT, prompt, ctx->s2_model,
+                                   AIRY_GRAD_ROLE_A, &plan_json, &plan_json_len);
     AIRY_FREE(prompt);
 
     if (err != AIRY_SUCCESS || !plan_json) {

@@ -15,7 +15,8 @@
 #include "airy_llm_ops.h"
 
 airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *user,
-                         const char *model, char **out_text, size_t *out_len)
+                         const char *model, airy_grad_role_e role, char **out_text,
+                         size_t *out_len)
 {
     if (!ctx || !system || !user || !out_text || !out_len)
         return AIRY_EINVAL;
@@ -69,10 +70,11 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
     __builtin_memcpy(text, resp->choices[0].content, len);
     text[len] = '\0';
 
-    /* 2.1.1.6 修复：保留真实 token 消耗（思考 token），逐次累计到 ctx */
-    ctx->prompt_tokens += resp->prompt_tokens;
-    ctx->completion_tokens += resp->completion_tokens;
-    ctx->total_tokens += resp->total_tokens;
+    /* 0.1.20 B1-e：真实 token 消耗按调用角色分槽累计（思考 token 保留），
+     * 供 feedback / 成本复算区分 prefill/decode 归属模型 A/B。 */
+    ctx->usage[role].prompt += resp->prompt_tokens;
+    ctx->usage[role].completion += resp->completion_tokens;
+    ctx->usage[role].total += resp->total_tokens;
 
     *out_text = text;
     *out_len = len;

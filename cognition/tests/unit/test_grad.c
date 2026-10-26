@@ -213,6 +213,7 @@ int main(void)
     RUN_TEST(test_progress_events);
     RUN_TEST(test_e05_verify_insufficient);
     RUN_TEST(test_arbiter_malformed_verdicts);
+    RUN_TEST(test_grad_role_usage);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
            tests_failed);
