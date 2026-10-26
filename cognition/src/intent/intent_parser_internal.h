@@ -29,7 +29,6 @@
 
 #include "airy_rt.h"
 #include "cognition.h"
-#include "error_utils.h"
 #include "logging.h"
 #include "airy_memory.h"
 #include "string_compat.h"
