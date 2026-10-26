@@ -229,6 +229,12 @@ int main(void)
     RUN_TEST(test_meta_inputs_fill);
     RUN_TEST(test_meta_cost_fill);
     RUN_TEST(test_meta_explicit_kept);
+    RUN_TEST(test_verdict_contract_valid);
+    RUN_TEST(test_verdict_contract_invalid);
+    RUN_TEST(test_patch_scope_bounds);
+    RUN_TEST(test_patch_build_incremental);
+    RUN_TEST(test_patch_full);
+    RUN_TEST(test_plan_merge_scope);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
            tests_failed);
