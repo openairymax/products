@@ -44,6 +44,15 @@
             tests_passed++;              \
     } while (0)
 
+/* 单点断言：失败计入 tests_failed 并 fail-fast 终止当前测试函数 */
+#define TEST_CHECK(cond, msg)         \
+    do {                              \
+        if (!(cond)) {                \
+            TEST_FAIL(__func__, msg); \
+            return;                   \
+        }                             \
+    } while (0)
+
 /* 全局计数（定义于 test_grad.c 主文件） */
 extern int tests_run;
 extern int tests_passed;
@@ -98,5 +107,13 @@ void test_edge_cases(void);
 void test_progress_events(void);
 void test_grad_role_usage(void);
 void test_grad_c11_contract(void);
+
+/* GRAD 计划 schema v1 校验域（test_grad_schema.c，0.1.20 C1） */
+void test_schema_valid_full(void);
+void test_schema_optional_metadata(void);
+void test_schema_plan_id(void);
+void test_schema_node_fields(void);
+void test_schema_structure(void);
+void test_schema_inputs(void);
 
 #endif /* TEST_GRAD_INTERNAL_H */
