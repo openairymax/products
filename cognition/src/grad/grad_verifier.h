@@ -88,6 +88,22 @@ typedef struct airy_grad_budget {
     int64_t mem_mb;
 } airy_grad_budget_t;
 
+/**
+ * @brief 差分验证闭包：scope 节点 + 全部依赖前驱 + 直接后继
+ *        （GRAD V3.0 §6.4 一阶闭包，0.1.20 C6 修补 scope 复用）。
+ *
+ * @param plan [in] 任务计划（non-NULL, BORROW）
+ * @param scope_nodes [in] 变更节点 ID 数组（可为 NULL）
+ * @param scope_count [in] 变更节点数
+ * @param out_closure [out] 闭包节点下标数组（OWNER，调用方 AIRY_FREE）
+ * @param out_count [out] 闭包大小
+ * @return AIRY_SUCCESS / AIRY_ENOMEM
+ *
+ * @ownership out_closure: OWNER
+ */
+airy_err_t grad_compute_closure(const airy_task_plan_t *plan, const char *const *scope_nodes,
+                                size_t scope_count, int **out_closure, size_t *out_count);
+
 
 typedef struct airy_grad_report {
     airy_grad_error_t error;

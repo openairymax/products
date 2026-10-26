@@ -179,6 +179,8 @@ set(COGNITION_SOURCES
     src/grad/plan_schema.c
     # GRAD 计划缺省元数据推导（0.1.20 C4）
     src/grad/plan_metadata.c
+    # GRAD C6 增量修补域：Δk scope / B patch 构建 / 计划合并 / 序列化复验
+    src/grad/grad_patch.c
     # MC/TC 认知基座策略载荷（0.1.19 M5-4 §268，自 atoms/coreloopthree
     # src/cognition/think/foundation 迁入；机制核仅留 tc.h/mc.h 契约 +
     # ops 注入表，daemon 侧经 payload_registry 注表）
