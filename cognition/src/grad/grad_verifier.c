@@ -588,6 +588,17 @@ static int grad_closure_impl(const airy_task_plan_t *plan, const char *const *sc
         closure[count++] = idx;
     }
 
+    /* 一阶闭包：scope + 传递前驱 + scope 的直接后继。后继扩展必须以
+     * scope 原集合为准（先快照），否则前驱的兄弟节点与同趟级联都会被
+     * 吸进来，修补域被无谓放大。 */
+    int *snap = (int *)AIRY_CALLOC(n, sizeof(int));
+    if (!snap) {
+        AIRY_FREE(closure);
+        AIRY_FREE(in_set);
+        return -2;
+    }
+    AIRY_MEMCPY(snap, in_set, n * sizeof(int));
+
     int changed = 1;
     while (changed) {
         changed = 0;
@@ -612,7 +623,7 @@ static int grad_closure_impl(const airy_task_plan_t *plan, const char *const *sc
             continue;
         for (size_t d = 0; d < node->task_node_depends_count; d++) {
             int pi = grad_find_node_index(plan, node->task_node_depends_on[d]);
-            if (pi >= 0 && in_set[pi]) {
+            if (pi >= 0 && snap[pi]) {
                 in_set[v] = 1;
                 closure[count++] = (int)v; /* size_t→int 收窄显式化（C4267） */
                 break;
@@ -620,6 +631,7 @@ static int grad_closure_impl(const airy_task_plan_t *plan, const char *const *sc
         }
     }
 
+    AIRY_FREE(snap);
     AIRY_FREE(in_set);
     *out_closure = closure;
     *out_count = count;
