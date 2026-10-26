@@ -97,5 +97,6 @@ void test_build_patch(void);
 void test_edge_cases(void);
 void test_progress_events(void);
 void test_grad_role_usage(void);
+void test_grad_c11_contract(void);
 
 #endif /* TEST_GRAD_INTERNAL_H */

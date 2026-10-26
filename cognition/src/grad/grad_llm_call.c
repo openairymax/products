@@ -39,7 +39,12 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
     llm_cfg.model = model;
     llm_cfg.messages = msgs;
     llm_cfg.message_count = 2;
-    llm_cfg.temperature = 0.2f;
+    /* C11：temperature_set 哨兵使 0.0 可显式下发（旧口径 0 被当缺省，
+     * 机制面兜底 0.7）；固定种子保证同输入同结论。能力位由机制面
+     * 盖印门控，本侧显式请求、机制侧裁剪。 */
+    llm_cfg.temperature = 0.0f;
+    llm_cfg.temperature_set = true;
+    llm_cfg.seed = GRAD_SEED;
     llm_cfg.top_p = 1.0f;
     llm_cfg.max_tokens = (int)ctx->max_tokens;
     if (llm_cfg.max_tokens == 0)
@@ -57,6 +62,19 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
         if (resp && llm_ops && llm_ops->response_free)
             llm_ops->response_free(resp);
         AIRY_LOG_WARN("GRAD-LLM: call failed (ret=%d)", ret);
+        return AIRY_ESERVICE;
+    }
+
+    /* C11 非流式完整性（策略侧）：机制面对非流式不判（max_tokens 截断
+     * 属合法消费），GRAD 下游是 JSON 契约解析器——截断/内容过滤/缺终结
+     * 必须在此显式失败，禁止半截输出流入 plan/verdict 解析。 */
+    const char *fr = resp->finish_reason;
+    if (!fr || llm_finish_is_truncated(fr) ||
+        strcmp(fr, LLM_FINISH_CONTENT_FILTER) == 0) {
+        if (llm_ops && llm_ops->response_free)
+            llm_ops->response_free(resp);
+        AIRY_LOG_WARN("GRAD-LLM: incomplete output (finish_reason=%s)",
+                      fr ? fr : "absent");
         return AIRY_ESERVICE;
     }
 
