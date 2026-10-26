@@ -38,13 +38,21 @@
 
 static int g_fail = 0;
 
-#define CHECK(cond)                                                     \
-    do {                                                                \
-        if (!(cond)) {                                                  \
-            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__,     \
-                    #cond);                                             \
-            g_fail++;                                                   \
-        }                                                               \
+static void ut_fail(const char *file, long line, const char *cond)
+{
+    char msg[512];
+    int n = snprintf(msg, sizeof(msg), "FAIL %s:%ld: %s\n",
+                     file, line, cond);
+
+    if (n > 0)
+        fwrite(msg, 1, (size_t)n, stderr);
+    g_fail++;
+}
+
+#define CHECK(cond)                                   \
+    do {                                              \
+        if (!(cond))                                  \
+            ut_fail(__FILE__, __LINE__, #cond);       \
     } while (0)
 
 static const char * const UT_FILES[2] = { "a.c", "b.c" };
@@ -109,7 +117,7 @@ static void test_propose_admit_gates(void)
     canary_gates_t g;
 
     CHECK(canary_new(&c, "/tmp/ut_x", "ut") == 0);
-    memset(&b, 0, sizeof(b));
+    b = (canary_blast_t){0};
     CHECK(canary_propose(c, NULL) == -1);
     b.module = "other";
     b.files = UT_FILES;
@@ -131,7 +139,7 @@ static void test_propose_admit_gates(void)
     CHECK(canary_admit(150, 201) == -1);
     CHECK(canary_admit(0, 200) == -1);
 
-    memset(&g, 0, sizeof(g));
+    g = (canary_gates_t){0};
     g.ok_pm = 9990;
     g.perf_ppm = 9500;
     g.rb_secs = 300;
@@ -168,7 +176,7 @@ static void test_flow(void)
     tmp_root(root, sizeof(root));
     ut_cleanup(root);
     CHECK(canary_new(&c, root, "ut") == 0);
-    memset(&b, 0, sizeof(b));
+    b = (canary_blast_t){0};
     b.module = "ut";
     b.files = UT_FILES;
     b.nfiles = 2;
@@ -187,7 +195,7 @@ static void test_flow(void)
     CHECK(canary_step(c, 9 * CANARY_DWELL_MS) == 1); /* 满级 */
     CHECK(canary_route(c, 999) == 1);
 
-    memset(&g, 0, sizeof(g));
+    g = (canary_gates_t){0};
     g.ok_pm = 10000;
     g.perf_ppm = 9800;
     g.rb_secs = 60;
@@ -223,7 +231,7 @@ static void test_rollback(void)
     canary_free(c);
 
     CHECK(canary_new(&c, root, "ut") == 0);
-    memset(&b, 0, sizeof(b));
+    b = (canary_blast_t){0};
     b.module = "ut";
     b.files = UT_FILES;
     b.nfiles = 1;
@@ -312,7 +320,7 @@ static void test_route_sampling(void)
     uint64_t total = 0, picked = 0;
 
     CHECK(canary_new(&c, "/tmp/ut_route", "ut") == 0);
-    memset(&b, 0, sizeof(b));
+    b = (canary_blast_t){0};
     b.module = "ut";
     b.files = UT_FILES;
     b.nfiles = 1;
@@ -341,9 +349,14 @@ int main(void)
     test_route_sampling();
 
     if (g_fail != 0) {
-        fprintf(stderr, "canary unit: %d failure(s)\n", g_fail);
+        char msg[64];
+        int n = snprintf(msg, sizeof(msg),
+                         "canary unit: %d failure(s)\n", g_fail);
+
+        if (n > 0)
+            fwrite(msg, 1, (size_t)n, stderr);
         return 1;
     }
-    printf("canary unit: all tests passed\n");
+    fputs("canary unit: all tests passed\n", stdout);
     return 0;
 }

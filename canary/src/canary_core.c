@@ -61,7 +61,7 @@ int canary_new(canary_t **out, const char *root, const char *module)
     n = snprintf(c->sentry, sizeof(c->sentry), "%s/kill", c->overlay);
     if (n < 0 || (size_t)n >= sizeof(c->sentry))
         goto fail;
-    memcpy(c->module, module, strlen(module) + 1);
+    snprintf(c->module, sizeof(c->module), "%s", module);
     atomic_init(&c->st, CANARY_ST_NONE);
     atomic_init(&c->stage, 0u);
     atomic_init(&c->permille, 0u);
@@ -246,14 +246,14 @@ void canary_ks_env(const char *name)
 {
     if (!name || strlen(name) >= sizeof(g_ks_env))
         return;
-    memcpy(g_ks_env, name, strlen(name) + 1);
+    snprintf(g_ks_env, sizeof(g_ks_env), "%s", name);
 }
 
 void canary_ks_file(const char *path)
 {
     if (!path || strlen(path) >= sizeof(g_ks_file))
         return;
-    memcpy(g_ks_file, path, strlen(path) + 1);
+    snprintf(g_ks_file, sizeof(g_ks_file), "%s", path);
 }
 
 static int ks_probe_file(const char *path)

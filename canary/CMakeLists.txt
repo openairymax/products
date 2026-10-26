@@ -56,6 +56,16 @@ set(CMAKE_C_STANDARD 11)
 
 option(BUILD_TESTS "Build tests" ON)
 
+# SE-01 合规嵌入态实现层豁免（先例：atoms/corekern/freestanding 逐源
+# 注入）：根构建以 -include banned_functions.h 全域毒化 libc 分配原语，
+# canary_core.c 的 canary_new/canary_free 是模块唯一分配边界（不依赖
+# commons 分配器以维持零 agentrt 依赖），按实现层通道豁免。standalone
+# 构建无 banned 头注入，此定义无副作用。
+if(NOT CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    set_source_files_properties(src/canary_core.c PROPERTIES
+        COMPILE_DEFINITIONS "AIRY_COMPLIANCE_IMPL")
+endif()
+
 add_library(airy_canary STATIC
     src/canary_core.c
     src/canary_manifest.c
