@@ -154,7 +154,7 @@ airy_err_t grad_llm_s1_arbiter(const airy_gccp_goal_t *goal, const airy_grad_rep
     char *verdict = NULL;
     size_t verdict_len = 0;
     airy_err_t err = grad_llm_call(ctx, GRAD_S1_ARBITER_SYSTEM_PROMPT, prompt, ctx->s1_verify_model,
-                                   &verdict, &verdict_len);
+                                   AIRY_GRAD_ROLE_B, &verdict, &verdict_len);
     AIRY_FREE(prompt);
 
     if (err != AIRY_SUCCESS || !verdict) {

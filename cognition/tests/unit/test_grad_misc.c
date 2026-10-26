@@ -109,6 +109,70 @@ void test_edge_cases(void)
     free_plan(ig);
 }
 
+/* B1-e 分角色计量 fake：逐次递增 usage（seq 驱动），静态响应免释放
+ * （测试二进制未注入 LLM ops，are_ops_get_llm()==NULL 约定，先例见
+ * test_cog_review_strategy.c）。 */
+typedef struct {
+    int seq;
+} ru_fake_t;
+
+static llm_response_t g_ru_resp;
+static llm_message_t g_ru_choices[1];
+
+static int ru_fake_complete(void *ctx, const llm_request_config_t *cfg, llm_response_t **out)
+{
+    ru_fake_t *f = (ru_fake_t *)ctx;
+    (void)cfg;
+    f->seq++;
+    g_ru_choices[0].role = "assistant";
+    g_ru_choices[0].content = "ok";
+    __builtin_memset(&g_ru_resp, 0, sizeof(g_ru_resp));
+    g_ru_resp.choices = g_ru_choices;
+    g_ru_resp.choice_count = 1;
+    g_ru_resp.prompt_tokens = (uint32_t)(10 * f->seq);
+    g_ru_resp.completion_tokens = (uint32_t)f->seq;
+    g_ru_resp.total_tokens = (uint32_t)(11 * f->seq);
+    *out = &g_ru_resp;
+    return 0;
+}
+
+static void ru_call(grad_llm_ctx_t *ctx, airy_grad_role_e role)
+{
+    char *text = NULL;
+    size_t len = 0;
+    airy_err_t err = grad_llm_call(ctx, "sys", "usr", "model", role, &text, &len);
+    if (err == AIRY_SUCCESS && text)
+        AIRY_FREE(text);
+    else
+        TEST_FAIL("role usage call", "grad_llm_call failed");
+}
+
+void test_grad_role_usage(void)
+{
+    grad_llm_ctx_t ctx;
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    ru_fake_t fake = {0};
+    ctx.complete = ru_fake_complete;
+    ctx.complete_ctx = &fake;
+
+    ru_call(&ctx, AIRY_GRAD_ROLE_A); /* +10/+1/+11 */
+    ru_call(&ctx, AIRY_GRAD_ROLE_B); /* +20/+2/+22 */
+    ru_call(&ctx, AIRY_GRAD_ROLE_A); /* +30/+3/+33 */
+
+    char msg[160];
+    if (ctx.usage[AIRY_GRAD_ROLE_A].prompt == 40 && ctx.usage[AIRY_GRAD_ROLE_A].completion == 4 &&
+        ctx.usage[AIRY_GRAD_ROLE_A].total == 44 && ctx.usage[AIRY_GRAD_ROLE_B].prompt == 20 &&
+        ctx.usage[AIRY_GRAD_ROLE_B].completion == 2 && ctx.usage[AIRY_GRAD_ROLE_B].total == 22) {
+        TEST_PASS("A/B role token usage isolated and accumulated");
+    } else {
+        snprintf(msg, sizeof(msg), "A={%u,%u,%u} B={%u,%u,%u}", ctx.usage[AIRY_GRAD_ROLE_A].prompt,
+                 ctx.usage[AIRY_GRAD_ROLE_A].completion, ctx.usage[AIRY_GRAD_ROLE_A].total,
+                 ctx.usage[AIRY_GRAD_ROLE_B].prompt, ctx.usage[AIRY_GRAD_ROLE_B].completion,
+                 ctx.usage[AIRY_GRAD_ROLE_B].total);
+        TEST_FAIL("role usage isolation", msg);
+    }
+}
+
 void test_progress_events(void)
 {
     airy_task_plan_t *seed = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));

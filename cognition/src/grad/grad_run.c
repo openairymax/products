@@ -78,18 +78,33 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
 
     out_outcome->converged = grad_stats.converged;
     out_outcome->stats = grad_stats;
-    out_outcome->prompt_tokens = grad_ctx.prompt_tokens;
-    out_outcome->completion_tokens = grad_ctx.completion_tokens;
-    out_outcome->total_tokens = grad_ctx.total_tokens;
+
+    /* 0.1.20 B1-e：outcome 回填分角色 usage，聚合三字段 = 各角色求和
+     * （对账校验位：聚合与分角色必须自洽，成本复算二选一皆可）。 */
+    for (int r = 0; r < AIRY_GRAD_ROLE_COUNT; r++) {
+        out_outcome->usage[r] = grad_ctx.usage[r];
+        out_outcome->prompt_tokens += grad_ctx.usage[r].prompt;
+        out_outcome->completion_tokens += grad_ctx.usage[r].completion;
+        out_outcome->total_tokens += grad_ctx.usage[r].total;
+    }
 
     /* 2.1.1.6 修复：思考 token 保留——GRAD 各阶段 LLM 调用（模型 A 计划
      * 生成 / 模型 B 仲裁）的真实 token 消耗写入决策链 trace，与
-     * rounds/rejections 等元数据同链持久化，可回溯审计。 */
+     * rounds/rejections 等元数据同链持久化，可回溯审计。B1-e 起 trace
+     * 同时携带分角色明细（a_ 与 b_ 前缀字段），成本报表可对账到模型槽。 */
     {
-        char tok_trace[256];
+        char tok_trace[512];
         snprintf(tok_trace, sizeof(tok_trace),
-                 "{\"prompt_tokens\":%u,\"completion_tokens\":%u,\"total_tokens\":%u}",
-                 grad_ctx.prompt_tokens, grad_ctx.completion_tokens, grad_ctx.total_tokens);
+                 "{\"prompt_tokens\":%u,\"completion_tokens\":%u,\"total_tokens\":%u,"
+                 "\"a_prompt\":%u,\"a_completion\":%u,\"a_total\":%u,"
+                 "\"b_prompt\":%u,\"b_completion\":%u,\"b_total\":%u}",
+                 out_outcome->prompt_tokens, out_outcome->completion_tokens,
+                 out_outcome->total_tokens, out_outcome->usage[AIRY_GRAD_ROLE_A].prompt,
+                 out_outcome->usage[AIRY_GRAD_ROLE_A].completion,
+                 out_outcome->usage[AIRY_GRAD_ROLE_A].total,
+                 out_outcome->usage[AIRY_GRAD_ROLE_B].prompt,
+                 out_outcome->usage[AIRY_GRAD_ROLE_B].completion,
+                 out_outcome->usage[AIRY_GRAD_ROLE_B].total);
         grad_llm_trace_append(&grad_ctx, "token_usage", tok_trace);
     }
     grad_llm_trace_close(&grad_ctx);

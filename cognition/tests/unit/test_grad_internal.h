@@ -96,5 +96,6 @@ void test_arbiter_malformed_verdicts(void);
 void test_build_patch(void);
 void test_edge_cases(void);
 void test_progress_events(void);
+void test_grad_role_usage(void);
 
 #endif /* TEST_GRAD_INTERNAL_H */

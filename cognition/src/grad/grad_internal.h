@@ -252,13 +252,11 @@ typedef struct grad_llm_ctx {
 
     uint32_t max_tokens;
 
-    /* 2.1.1.6 修复：GRAD 各阶段 LLM 调用 token 累计（思考 token 保留）——
-     * s2_plan（模型 A）与 s1_arbiter（模型 B）的真实 usage 逐次累加，
-     * 供 engine feedback / 计费上报使用。t1-p（模型 C）为确定性验证器，
-     * 不调 LLM，不计入。 */
-    uint32_t prompt_tokens;
-    uint32_t completion_tokens;
-    uint32_t total_tokens;
+    /* 0.1.20 B1-e：GRAD 分角色 token 计量（思考 token 保留）——
+     * s2_plan（模型 A 槽）与 s1_arbiter（模型 B 槽）的真实 usage 按
+     * 角色逐次累加，供 engine feedback / 成本复算使用。t1-p（模型 C）
+     * 为确定性验证器，不调 LLM，不设槽。 */
+    airy_grad_usage_t usage[AIRY_GRAD_ROLE_COUNT];
 
     const airy_gccp_goal_t *goal;
 
@@ -331,9 +329,10 @@ char *grad_ws_dir(const grad_llm_ctx_t *ctx);
 int grad_ws_write_file(const char *dir, const char *sub, const char *name, const char *data,
                        size_t data_len);
 
-/* grad_llm_call.c — LLM 调用域（经 complete 闭包） */
+/* grad_llm_call.c — LLM 调用域（经 complete 闭包）；role 决定 usage 计量槽 */
 airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *user,
-                         const char *model, char **out_text, size_t *out_len);
+                         const char *model, airy_grad_role_e role, char **out_text,
+                         size_t *out_len);
 
 /* grad_llm_s2_plan.c — 模型 A 计划生成域 */
 char *grad_goal_to_json(const airy_gccp_goal_t *goal, const grad_llm_ctx_t *ctx);
