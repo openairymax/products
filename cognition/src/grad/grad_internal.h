@@ -69,6 +69,14 @@ extern "C" {
  */
 #define AIRY_GRAD_ARBITER_MIN_CONF 0.55
 
+/* 模型 B 裁决契约界（C2 §5.2b.4）；置于 ctx 之前，round_hist 定长依赖 */
+#define GRAD_DEFECT_CODE_MAX 8              /**< "E-01".."E-05" / "SEM" */
+#define GRAD_ARBITER_PROMPT_MAX_CHARS 12000 /**< B 的 prompt 字符预算 */
+#define GRAD_ARBITER_GOAL_MAX_CHARS 4000    /**< goal 片段截断上界 */
+#define GRAD_ARBITER_MAX_DEFECTS 32         /**< defects[] 解析上界（超出截断） */
+#define GRAD_ARBITER_MAX_HISTORY 3          /**< round_history[] 保留轮数 */
+#define GRAD_ARBITER_HIST_LINE 128          /**< 单条历史行长 */
+
 /**
  * @brief Plan generation callback (model A, t2).
  *
@@ -275,6 +283,12 @@ typedef struct grad_llm_ctx {
     void *chain_log;
 
     uint32_t round_index;
+
+    /* C2 轮次历史（§5.2b.4 第 5 优先级片段）：由 B 每次裁决后自行
+     * 追加"round=N verdict=... defects=E-01@id"，环形保留最近
+     * GRAD_ARBITER_MAX_HISTORY 条，避免 B 在后续轮次重复同一驳回。 */
+    char round_hist[GRAD_ARBITER_MAX_HISTORY][GRAD_ARBITER_HIST_LINE];
+    uint32_t round_hist_count;
 } grad_llm_ctx_t;
 
 /**
@@ -297,7 +311,12 @@ airy_err_t grad_llm_s2_plan(const airy_gccp_goal_t *goal, const char *patch_json
  * @brief Model B contextual arbitration callback (grad_s1_arbiter_fn 实现)。
  *
  * Combines goal G with C's verification report; LLM issues the final
- * verdict JSON: {"verdict":"accept|reject","confidence":0.0-1.0,"opinion":"..."}
+ * verdict JSON (C2 契约, §5.2b.4):
+ *   {"verdict":"accept|reject","confidence":0..1,"e04":"pass|fail|unknown",
+ *    "defects":[{node_id,code,evidence,suggestion}],"affected_scope":[...],
+ *    "opinion":"..."}
+ * prompt 按六级优先级装配（goal → c_report → 审查节点全文 → 其余节点
+ * 摘要 → 轮次历史 → guard 列表），受 GRAD_ARBITER_PROMPT_MAX_CHARS 约束。
  * Returns NULL verdict when LLM is unavailable (accept C's hard-logic
  * verdict, conservative policy).
  *
@@ -350,10 +369,12 @@ size_t grad_plan_metadata_fill(airy_task_plan_t *plan);
 /* grad_patch.c — C6 增量修补域（0.1.20 §5.2b.3）：
  * B 驳回缺陷 → Δk 修补 scope → 计划合并 → 合并产物序列化复验 */
 
+/* 模型 B 裁决契约界（C2 §5.2b.4）——定义见文件前部 */
+
 /** @brief 单条缺陷（B_Model verdict defects[] 元素）。 */
 typedef struct grad_defect {
     char node_id[GRAD_NODE_ID_MAX + 1];
-    char code[8];        /**< "E-01"~"E-04"（C2 契约枚举内） */
+    char code[GRAD_DEFECT_CODE_MAX]; /**< "E-01".."E-05" | "SEM"（C2 契约枚举） */
     char evidence[256];
     char suggestion[256];
 } grad_defect_t;
@@ -403,8 +424,70 @@ airy_err_t grad_plan_merge(const airy_task_plan_t *plan, const airy_task_plan_t 
  */
 airy_err_t grad_plan_to_json(const airy_task_plan_t *plan, char **out_json);
 
-/* grad_llm_s1_arbiter.c — 模型 B 仲裁域 */
-char *grad_collect_guards(const airy_task_plan_t *plan);
+/* grad_verdict.c — C2 裁决契约解析（§5.2b.4 输出强校验） */
+
+/** @brief 终裁取向（契约仅两值；低置信度由协调器按 θ_B 另行折让）。 */
+typedef enum grad_vd_kind {
+    GRAD_VD_ACCEPT = 0,
+    GRAD_VD_REJECT
+} grad_vd_kind_t;
+
+/** @brief E-04 目的漂移三态；契约缺省归 UNKNOWN（不臆测）。 */
+typedef enum grad_e04 {
+    GRAD_E04_UNKNOWN = 0,
+    GRAD_E04_PASS,
+    GRAD_E04_FAIL
+} grad_e04_t;
+
+/**
+ * @brief B 裁决解析结果（OWNER 语义：defects/scope 由 grad_verdict_free 回收）。
+ *
+ * 与原始 JSON 解耦：协调器只消费本结构，不再做松散字段读取。
+ */
+typedef struct grad_verdict {
+    grad_vd_kind_t kind;
+    double confidence;
+    grad_e04_t e04;
+    char opinion[256];
+    grad_defect_t *defects; /**< OWNER；defect_count == 0 时为 NULL */
+    size_t defect_count;
+    char **scope; /**< affected_scope，去重保序；OWNER（顶层与元素） */
+    size_t scope_count;
+} grad_verdict_t;
+
+/**
+ * @brief 严格解析 B 裁决 JSON（契约校验，任一违例整份拒绝）。
+ *
+ * 校验项（§5.2b.4）：
+ *   - verdict ∈ {accept,reject}（缺失/其它值 → 失败）；
+ *   - confidence 为数字或数字串且 ∈ [0,1]（类型非法/越界 → 失败）；
+ *   - e04 缺省归 UNKNOWN，出现则必须是 pass|fail|unknown；
+ *   - defects[] 每项 node_id 必须存在于 plan，code ∈ {E-01..E-05,SEM}；
+ *     条数超过 GRAD_ARBITER_MAX_DEFECTS 截断并 WARN（保裁决本体）；
+ *   - affected_scope[] 元素必须存在于 plan，去重保序，超计划节点数截断。
+ *
+ * 契约违例由调用方记 arbiter_parse_error 并降级"采纳 C 判定"，
+ * **不得**把非法 JSON 当作 accept。
+ *
+ * @param json [in] LLM 输出（non-NULL, BORROW）
+ * @param plan [in] 被裁决计划（用于 node_id 存在性校验；BORROW）
+ * @param out [out] 解析结果（non-NULL, OUT；失败时保持全零）
+ * @return AIRY_SUCCESS 合规；AIRY_EINVAL 契约违例；AIRY_ENOMEM
+ *
+ * @ownership out->defects/out->scope: OWNER（grad_verdict_free）
+ * @threadsafe yes（无共享状态）
+ */
+airy_err_t grad_verdict_parse(const char *json, const airy_task_plan_t *plan,
+                              grad_verdict_t *out);
+
+/**
+ * @brief 回收裁决解析结果（可重复调用；入参可为 NULL）。
+ *
+ * @ownership v: NONE（仅释放其内部 OWNER 成员）
+ */
+void grad_verdict_free(grad_verdict_t *v);
+
+/* grad_llm_s1_arbiter.c — 模型 B 仲裁域（prompt 六级装配，见 .c 头注释） */
 
 #ifdef __cplusplus
 }
