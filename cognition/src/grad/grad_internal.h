@@ -54,6 +54,10 @@ extern "C" {
 
 #define AIRY_GRAD_MAX_ITERATIONS 3
 
+/* C11：GRAD 全链确定性采样——温度 0 + 固定种子，验证/仲裁结论可复现。
+ * 种子非零是硬约束（零值=不发送约定下等价缺省）。 */
+#define GRAD_SEED 20260101u
+
 /**
  * @brief Model B (t1-f) arbitration confidence threshold θ_B (GRAD V3.0 §11).
  *

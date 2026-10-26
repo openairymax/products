@@ -129,6 +129,7 @@ static int ru_fake_complete(void *ctx, const llm_request_config_t *cfg, llm_resp
     __builtin_memset(&g_ru_resp, 0, sizeof(g_ru_resp));
     g_ru_resp.choices = g_ru_choices;
     g_ru_resp.choice_count = 1;
+    g_ru_resp.finish_reason = "stop"; /* C11：自然终结方为合法输出 */
     g_ru_resp.prompt_tokens = (uint32_t)(10 * f->seq);
     g_ru_resp.completion_tokens = (uint32_t)f->seq;
     g_ru_resp.total_tokens = (uint32_t)(11 * f->seq);
@@ -145,6 +146,75 @@ static void ru_call(grad_llm_ctx_t *ctx, airy_grad_role_e role)
         AIRY_FREE(text);
     else
         TEST_FAIL("role usage call", "grad_llm_call failed");
+}
+
+/* C11 契约 fake：捕获最近一次请求配置，finish_reason 可编程。 */
+typedef struct {
+    const llm_request_config_t *last_cfg;
+    const char *finish_reason;
+} c11_fake_t;
+
+static llm_response_t g_c11_resp;
+static llm_message_t g_c11_choices[1];
+
+static int c11_fake_complete(void *ctx, const llm_request_config_t *cfg, llm_response_t **out)
+{
+    c11_fake_t *f = (c11_fake_t *)ctx;
+    f->last_cfg = cfg;
+    g_c11_choices[0].role = "assistant";
+    g_c11_choices[0].content = "{\"ok\":true}";
+    __builtin_memset(&g_c11_resp, 0, sizeof(g_c11_resp));
+    g_c11_resp.choices = g_c11_choices;
+    g_c11_resp.choice_count = 1;
+    g_c11_resp.finish_reason = f->finish_reason;
+    *out = &g_c11_resp;
+    return 0;
+}
+
+void test_grad_c11_contract(void)
+{
+    grad_llm_ctx_t ctx;
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    c11_fake_t fake = {0};
+    ctx.complete = c11_fake_complete;
+    ctx.complete_ctx = &fake;
+
+    char *text = NULL;
+    size_t len = 0;
+    char msg[160];
+
+    /* 采样契约：温度 0 显式下发（temperature_set 哨兵）+ 固定非零种子。 */
+    fake.finish_reason = "stop";
+    airy_err_t err = grad_llm_call(&ctx, "sys", "usr", "model", AIRY_GRAD_ROLE_A, &text, &len);
+    if (err != AIRY_SUCCESS || !text) {
+        TEST_FAIL("c11 sampling", "stop call failed");
+        return;
+    }
+    AIRY_FREE(text);
+    if (fake.last_cfg->temperature == 0.0f && fake.last_cfg->temperature_set &&
+        fake.last_cfg->seed == GRAD_SEED) {
+        TEST_PASS("temp=0 explicit + fixed seed");
+    } else {
+        snprintf(msg, sizeof(msg), "temp=%.2f set=%d seed=%u", fake.last_cfg->temperature,
+                 (int)fake.last_cfg->temperature_set, fake.last_cfg->seed);
+        TEST_FAIL("c11 sampling", msg);
+    }
+
+    /* 完整性契约：缺终结/截断/过滤一律 ESERVICE，半截输出不外泄。 */
+    static const char *bad[] = {NULL, "length", "content_filter"};
+    static const char *bad_name[] = {"absent", "truncated", "content_filtered"};
+    for (int i = 0; i < 3; i++) {
+        fake.finish_reason = bad[i];
+        text = NULL;
+        len = 0;
+        err = grad_llm_call(&ctx, "sys", "usr", "model", AIRY_GRAD_ROLE_A, &text, &len);
+        if (err == AIRY_ESERVICE && !text)
+            TEST_PASS(bad_name[i]);
+        else {
+            snprintf(msg, sizeof(msg), "err=%d text=%p", (int)err, (void *)text);
+            TEST_FAIL(bad_name[i], msg);
+        }
+    }
 }
 
 void test_grad_role_usage(void)
