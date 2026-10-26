@@ -88,9 +88,9 @@ int canary_admit(size_t new_fn, size_t mod_fn);
 /* 门禁判定：K1-K6 全绿返回 0，否则返回负错误码 */
 int canary_gates(const canary_gates_t *g);
 
-/* 状态推进（宿主串行调用） */
+/* 状态推进（宿主串行调用；to_canary 以真实时钟锚定驻留起点） */
 int canary_to_shadow(canary_t *c);
-int canary_to_canary(canary_t *c);
+int canary_to_canary(canary_t *c, uint64_t now_ms);
 /* C2 阶梯推进：≥2h 驻留后 10%→50%→100%；已满级返回 1 */
 int canary_step(canary_t *c, uint64_t now_ms);
 
