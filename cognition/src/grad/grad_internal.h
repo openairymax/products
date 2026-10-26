@@ -54,8 +54,6 @@ extern "C" {
 
 #define AIRY_GRAD_MAX_ITERATIONS 3
 
-#define AIRY_GRAD_NEIGHBOR_DEPTH 2
-
 /**
  * @brief Model B (t1-f) arbitration confidence threshold θ_B (GRAD V3.0 §11).
  *
@@ -107,7 +105,6 @@ typedef airy_err_t (*grad_s1_arbiter_fn)(const airy_gccp_goal_t *goal,
  */
 typedef struct airy_grad_config {
     uint32_t max_iterations;
-    uint32_t neighbor_depth;
     airy_grad_budget_t budget;
     grad_s2_plan_fn s2_plan;
     grad_s1_arbiter_fn s1_arbiter;
@@ -120,7 +117,6 @@ typedef struct airy_grad_config {
 
 #define AIRY_GRAD_CONFIG_DEFAULTS                \
     {.max_iterations = AIRY_GRAD_MAX_ITERATIONS, \
-     .neighbor_depth = AIRY_GRAD_NEIGHBOR_DEPTH, \
      .budget = {600000, 1024},                   \
      .s2_plan = NULL,                            \
      .s1_arbiter = NULL,                         \

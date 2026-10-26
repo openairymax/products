@@ -13,7 +13,7 @@
  *   Step 6 A patch fix → Step 7 convergence stop
  *
  * Differential entropy reduction (V3.0 §2.5): only Δ_k and its first-order
- * closure (neighbor_depth layers) are verified; unchanged nodes are treated
+ * closure are verified; unchanged nodes are treated
  * as proven theorems. Current version uses full-node differential scope
  * (node-level increments can be added later via grad_diff.c).
  */
@@ -108,8 +108,6 @@ airy_err_t airy_grad_coordinator_create(const airy_grad_config_t *config,
     coord->config = *config;
     if (coord->config.max_iterations == 0)
         coord->config.max_iterations = AIRY_GRAD_MAX_ITERATIONS;
-    if (coord->config.neighbor_depth == 0)
-        coord->config.neighbor_depth = AIRY_GRAD_NEIGHBOR_DEPTH;
 
     coord->rounds = NULL;
     coord->rounds_capacity = 0;
@@ -118,8 +116,8 @@ airy_err_t airy_grad_coordinator_create(const airy_grad_config_t *config,
     __builtin_memset(&coord->stats, 0, sizeof(airy_grad_stats_t));
 
     *out_coord = coord;
-    AIRY_LOG_INFO("GRAD: coordinator created (max_iterations=%u neighbor_depth=%u)",
-                  (unsigned)coord->config.max_iterations, (unsigned)coord->config.neighbor_depth);
+    AIRY_LOG_INFO("GRAD: coordinator created (max_iterations=%u)",
+                  (unsigned)coord->config.max_iterations);
     return AIRY_SUCCESS;
 }
 
