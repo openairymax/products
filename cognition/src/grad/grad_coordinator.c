@@ -12,10 +12,11 @@
  *   verification (differential scope) → Step 5 B contextual arbitration →
  *   Step 6 A patch fix → Step 7 convergence stop
  *
- * Differential entropy reduction (V3.0 §2.5): only Δ_k and its first-order
- * closure are verified; unchanged nodes are treated
- * as proven theorems. Current version uses full-node differential scope
- * (node-level increments can be added later via grad_diff.c).
+ * Differential entropy reduction (V3.0 §2.5): later rounds verify only the
+ * Δ_k patch scope and its first-order closure; unchanged nodes are treated
+ * as proven theorems. B verdict defects drive the incremental repair scope
+ * (C6, 0.1.20 §5.2b.3); closure overrun escalates to a single full redraw
+ * tagged repair_mode=full.
  */
 
 #include "grad_internal.h"
@@ -24,7 +25,6 @@
 #include "logging.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #ifdef AIRY_HAS_CJSON
@@ -86,6 +86,118 @@ static void grad_progress(airy_grad_coordinator_t *coord, int level, const char 
     if (coord && coord->config.progress_cb) {
         coord->config.progress_cb(level, event, data, coord->config.progress_user_data);
     }
+}
+
+/* 本轮 patch 来源，决定 s2_plan 产物如何落回计划 */
+typedef enum {
+    GRAD_PATCH_C = 0, /**< C 判据 patch：整份替换（允许增删节点） */
+    GRAD_PATCH_INCR,  /**< B verdict Δk：scope 内合并 + frozen 逐字段校验 */
+    GRAD_PATCH_FULL   /**< B 升级整份重绘：整份替换（唯一 full 路径） */
+} grad_pmode_t;
+
+/* Δk 修补 scope 所有权：顶层数组 + 元素（可重复调用） */
+static void grad_scope_free(char ***scope, size_t *count)
+{
+    if (!scope || !*scope) {
+        if (count)
+            *count = 0;
+        return;
+    }
+    for (size_t i = 0; i < *count; i++)
+        AIRY_FREE((*scope)[i]);
+    AIRY_FREE(*scope);
+    *scope = NULL;
+    *count = 0;
+}
+
+/* 单节点 scope（C 判据 patch 的复验入口） */
+static airy_err_t grad_scope_one(const char *id, char ***out_scope, size_t *out_count)
+{
+    *out_scope = (char **)AIRY_CALLOC(1, sizeof(char *));
+    if (!*out_scope)
+        return AIRY_ENOMEM;
+    (*out_scope)[0] = AIRY_STRDUP(id);
+    if (!(*out_scope)[0]) {
+        AIRY_FREE(*out_scope);
+        *out_scope = NULL;
+        return AIRY_ENOMEM;
+    }
+    *out_count = 1;
+    return AIRY_SUCCESS;
+}
+
+/*
+ * B 终裁阶段：严格解析裁决契约（§5.2b.4）→ θ_B 折让 → Δk 修补分流。
+ *
+ * 契约违例（arbiter_parse_error）、reject 但 defects 缺失、defect 节点
+ * 不可定位（G55 patch_invalid）一律降级"采纳 C 判定"，不得把非法输出当
+ * accept；闭包超界（E2BIG）与 force_full 走整份重绘（唯一 full 路径）。
+ *
+ * @return AIRY_SUCCESS：裁定完成（*out_reject=1 时 patch/scope 为 OWNER）；
+ *         AIRY_ENOMEM / AIRY_EUNKNOWN：本轮中止
+ */
+static airy_err_t grad_arb_stage(airy_grad_coordinator_t *coord, const airy_task_plan_t *plan,
+                                 uint32_t k, const char *verdict_json, int force_full,
+                                 int *out_reject, char **out_patch, char ***out_scope,
+                                 size_t *out_scope_count)
+{
+    *out_reject = 0;
+    *out_patch = NULL;
+    *out_scope = NULL;
+    *out_scope_count = 0;
+
+    grad_verdict_t v;
+    __builtin_memset(&v, 0, sizeof(v));
+    airy_err_t rc = grad_verdict_parse(verdict_json, plan, &v);
+    if (rc != AIRY_SUCCESS) {
+        AIRY_LOG_WARN("GRAD-B: arbiter_parse_error (err=%d), deferring to Model C", (int)rc);
+        grad_progress(coord, 0, "grad_arbiter_parse_error", "{\"fallback\":\"accept_c_verdict\"}");
+        return AIRY_SUCCESS;
+    }
+
+    int objection = (v.kind == GRAD_VD_REJECT || v.e04 == GRAD_E04_FAIL);
+    if (!objection || v.confidence < AIRY_GRAD_ARBITER_MIN_CONF) {
+        if (objection)
+            AIRY_LOG_INFO("GRAD-B: low-confidence objection ignored (conf=%.2f)", v.confidence);
+        grad_verdict_free(&v);
+        return AIRY_SUCCESS;
+    }
+
+    int full = force_full;
+    char **scope = NULL;
+    size_t scope_count = 0;
+    if (!full) {
+        size_t closure = 0;
+        rc = grad_patch_scope(plan, v.defects, v.defect_count, &scope, &scope_count, &closure);
+        if (rc == AIRY_E2BIG) {
+            full = 1;
+        } else if (rc != AIRY_SUCCESS) {
+            AIRY_LOG_WARN("GRAD-B: patch_invalid (err=%d defects=%zu), accepting C verdict",
+                          (int)rc, v.defect_count);
+            grad_progress(coord, 0, "grad_patch_invalid", "{\"fallback\":\"accept_c_verdict\"}");
+            grad_verdict_free(&v);
+            return AIRY_SUCCESS;
+        }
+    }
+
+    if (full) {
+        AIRY_LOG_WARN("GRAD-B: repair escalated to full redraw (reason=%s)",
+                      force_full ? "patch_inconsistent" : "closure_too_large");
+        rc = grad_patch_full(plan, k, v.defects, v.defect_count, out_patch);
+    } else {
+        rc = grad_patch_build(k, v.defects, v.defect_count, (const char *const *)scope,
+                              scope_count, out_patch);
+    }
+    grad_verdict_free(&v);
+
+    if (rc != AIRY_SUCCESS) {
+        grad_scope_free(&scope, &scope_count);
+        return rc;
+    }
+    *out_reject = 1;
+    *out_scope = scope;
+    *out_scope_count = scope_count;
+    return AIRY_SUCCESS;
 }
 
 airy_err_t airy_grad_coordinator_create(const airy_grad_config_t *config,
@@ -181,30 +293,33 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
         grad_progress(coord, 0, "grad_s2_done", pb);
     }
 
-    /* Differential scope tracking: round 0 verifies everything; later
-     * rounds verify only the previous rejection patch's affected_scope
-     * (Δ_k and its first-order closure) for differential entropy
-     * reduction. */
-    char *delta_scope = NULL;
+    /* Δ_k differential scope: round 0 verifies the whole plan; later rounds
+     * verify only the previous rejection patch's affected_scope (Δ_k) plus
+     * its first-order closure, resolved inside the verifier (F8/F9). */
+    char **delta_scope = NULL;
+    size_t delta_scope_count = 0;
+    /* patch_inconsistent 后的下一轮：跳过增量 scope，强制整份重绘 */
+    int force_full = 0;
     uint32_t k = 0;
     for (k = 0; k < coord->config.max_iterations; k++) {
+        grad_pmode_t pmode = GRAD_PATCH_C;
         airy_grad_report_t report;
         __builtin_memset(&report, 0, sizeof(report));
 
         /* Step 2/4: model C four-way verification (differential entropy
          * reduction: only Δ_k and its first-order closure; first round
-         * delta_scope=NULL → full verification) */
+         * delta_scope_count=0 → full verification) */
         {
             char pb[128];
-            snprintf(pb, sizeof(pb), "{\"round\":%u,\"scope\":\"%s\"}", (unsigned)k,
-                     delta_scope ? delta_scope : "full");
+            snprintf(pb, sizeof(pb), "{\"round\":%u,\"scope_nodes\":%zu}", (unsigned)k,
+                     delta_scope_count);
             grad_progress(coord, 0, "grad_verify_start", pb);
         }
         /* C5（0.1.20）：透传 goal，启用确定性 E-04 purpose-drift 守卫
          * （guard 节点 outputs 与 goal 关键词实体交集判定）。 */
         err = airy_grad_verify_scope_g(plan, &coord->config.budget, goal,
-                                       delta_scope ? (const char *const *)&delta_scope : NULL,
-                                       delta_scope ? 1 : 0, &report);
+                                       (const char *const *)delta_scope, delta_scope_count,
+                                       &report);
         if (err != AIRY_SUCCESS && err != AIRY_EINVAL) {
             AIRY_LOG_WARN("GRAD: verify failed (err=%d), aborting loop", (int)err);
             loop_err = err;
@@ -218,10 +333,8 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             grad_progress(coord, 0, "grad_verify_done", pb);
         }
 
-        if (delta_scope) {
-            AIRY_FREE(delta_scope);
-            delta_scope = NULL;
-        }
+        /* scope 复用窗口关闭：本轮验证已消费，下一轮 scope 由本轮裁定重填 */
+        grad_scope_free(&delta_scope, &delta_scope_count);
 
         airy_grad_round_t round;
         __builtin_memset(&round, 0, sizeof(round));
@@ -230,7 +343,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
         snprintf(round.error_desc, sizeof(round.error_desc), "%s",
                  airy_grad_error_str(report.error));
         snprintf(round.affected_node, sizeof(round.affected_node), "%s", report.affected_node);
-        round.verified_scope = plan->task_plan_node_count;
+        round.verified_scope = report.causal_checked;
         round.total_nodes = plan->task_plan_node_count;
         round.patch_json = NULL;
 
@@ -276,80 +389,23 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
                     grad_progress(coord, 0, "grad_arbiter_done", pb);
                 }
                 if (arb_err == AIRY_SUCCESS && verdict) {
-
                     int reject = 0;
-                    int e04_fail = 0;
-                    double conf = 1.0;
-#ifdef AIRY_HAS_CJSON
-                    cJSON *root = cJSON_Parse(verdict);
-                    if (root) {
-                        cJSON *v = cJSON_GetObjectItem(root, "verdict");
-                        cJSON *c = cJSON_GetObjectItem(root, "confidence");
-                        cJSON *e04 = cJSON_GetObjectItem(root, "e04");
-                        /* q8a：confidence 类型容错——number 直取；字符串
-                         * （LLM 常见 "0.3"）atof；对象/数组/其他非法类型按
-                         * 0.0（不信任，θ_B 保护生效）。此前仅 IsNumber 时
-                         * 非法类型静默保持 1.0，低置信 reject 被当作高置信
-                         * 触发修复循环（或低置信 accept 放行）。 */
-                        if (cJSON_IsNumber(c))
-                            conf = c->valuedouble;
-                        else if (cJSON_IsString(c) && c->valuestring)
-                            conf = atof(c->valuestring);
-                        else if (c)
-                            conf = 0.0;
-                        /* 2.1.1.2 修复（GRAD V3.0 §11）：B 终裁置信度不足
-                         * （< θ_B）时放弃终裁权，默认采纳模型 C 的硬逻辑
-                         * 判定（保守安全策略）。此前只解析 verdict 丢弃
-                         * confidence——低置信度 reject 会误触发修复循环
-                         * 浪费迭代，低置信度 accept 可能放行有风险计划。
-                         * LLM 未提供 confidence 字段时按 1.0 处理（兼容）。 */
-                        if (cJSON_IsString(v) && v->valuestring &&
-                            strcmp(v->valuestring, "reject") == 0 &&
-                            conf >= AIRY_GRAD_ARBITER_MIN_CONF)
-                            reject = 1;
-                        /* E-04 purpose drift（语义层守门）：invariant_guard
-                         * 节点与目标 G 冲突时，即便 verdict 文本为 accept 也
-                         * 是硬拒绝信号（目的漂移 > 语境意见），同受 θ_B 保护。 */
-                        if (cJSON_IsString(e04) && e04->valuestring &&
-                            strcmp(e04->valuestring, "fail") == 0) {
-                            e04_fail = 1;
-                            if (conf >= AIRY_GRAD_ARBITER_MIN_CONF)
-                                reject = 1;
-                        }
-                        cJSON_Delete(root);
-                    } else {
-                        /* q8a：B 仲裁 JSON 解析失败（markdown 围栏/前后缀
-                         * 文本）不得静默按"采纳 C"收敛——记录 WARN 与降级
-                         * 计数，B 的意见被丢弃需可观测。 */
-                        AIRY_LOG_WARN("GRAD-B: arbiter verdict JSON parse failed, "
-                                      "deferring to Model C (verdict=%.120s)",
-                                      verdict ? verdict : "");
-                    }
-#else
-                    (void)conf;
-#endif
+                    /* 契约强校验 + θ_B 折让 + Δk 分流（§5.2b.3/§5.2b.4） */
+                    err = grad_arb_stage(coord, plan, k, verdict, force_full, &reject,
+                                         &round.patch_json, &delta_scope, &delta_scope_count);
                     AIRY_FREE(verdict);
+                    if (err != AIRY_SUCCESS) {
+                        loop_err = err;
+                        break;
+                    }
+                    force_full = 0;
                     if (reject) {
                         /* Contextual rejection: overturn C's "verification
-                         * passed", reset the convergence flag, and trigger a
-                         * fix via a generic patch (conservative). */
+                         * passed", reset convergence, repair Δk or full. */
                         coord->stats.converged = 0;
-                        char patch[512];
-                        snprintf(patch, sizeof(patch),
-                                 "{\"patch_id\":\"P_%02u\",\"source\":\"B_Model\","
-                                 "\"error_code\":\"%s\",\"affected_scope\":[],"
-                                 "\"suggestion\":\"recheck task alignment\"}",
-                                 (unsigned)k, e04_fail ? "E-04" : "CTX");
-                        round.patch_json = AIRY_STRDUP(patch);
                         coord->stats.rejections++;
-                        if (!round.patch_json) {
-                            err = AIRY_ENOMEM;
-                            loop_err = err;
-                            break;
-                        }
-
+                        pmode = delta_scope_count ? GRAD_PATCH_INCR : GRAD_PATCH_FULL;
                     } else {
-
                         coord->stats.converged = 1;
                     }
                 }
@@ -382,18 +438,20 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             }
             round.patch_json = patch;
 
-            if (delta_scope)
-                AIRY_FREE(delta_scope);
-            /* 2.1.1.2 修复：E-03 资源超限的 affected_node 为 "aggregate"
-             * （非真实节点 ID），此前被当作下一轮 delta_scope 传入
-             * grad_compute_closure → 找不到节点 → closure 空 → 退化全量
-             * 验证（丧失差异熵减）。"aggregate" 语义即"全量"，直接置
-             * NULL 保持全量验证，不做无意义的 scope 空转。 */
-            delta_scope =
-                (report.affected_node[0] && strcmp(report.affected_node, "all") != 0 &&
-                 strcmp(report.affected_node, "aggregate") != 0) ?
-                    AIRY_STRDUP(report.affected_node) :
-                    NULL;
+            grad_scope_free(&delta_scope, &delta_scope_count);
+            /* E-03 资源超限的 affected_node 为 "aggregate"（非真实节点
+             * ID），"all"/"aggregate" 语义即"全量"：置空 scope 保持全量
+             * 验证，不做无意义的 scope 空转。 */
+            if (report.affected_node[0] && strcmp(report.affected_node, "all") != 0 &&
+                strcmp(report.affected_node, "aggregate") != 0) {
+                err = grad_scope_one(report.affected_node, &delta_scope, &delta_scope_count);
+                if (err != AIRY_SUCCESS) {
+                    AIRY_FREE(round.patch_json);
+                    round.patch_json = NULL;
+                    loop_err = err;
+                    break;
+                }
+            }
             AIRY_LOG_INFO("GRAD: round %u rejected (%s) scope=%s", (unsigned)k,
                           airy_grad_error_str(report.error),
                           report.affected_node[0] ? report.affected_node : "all");
@@ -422,6 +480,27 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             round.patch_json = NULL;
         }
 
+        if (pmode == GRAD_PATCH_INCR) {
+            /* Δk 增量：仅 scope 内整节点替换，frozen 逐字段校验。修补产物
+             * 越权/frozen 篡改 → 本轮作废（保留旧计划），下一轮强制整份
+             * 重绘（§5.2b.3 唯一 full 升级路径）。 */
+            airy_task_plan_t *merged = NULL;
+            err = grad_plan_merge(plan, new_plan, (const char *const *)delta_scope,
+                                  delta_scope_count, &merged);
+            airy_task_plan_free(new_plan);
+            if (err != AIRY_SUCCESS) {
+                AIRY_LOG_WARN("GRAD: patch_inconsistent (err=%d) at round %u, "
+                              "rolling back and forcing full redraw",
+                              (int)err, (unsigned)k);
+                grad_progress(coord, 0, "grad_patch_inconsistent",
+                              "{\"action\":\"rollback_full_redraw\"}");
+                grad_scope_free(&delta_scope, &delta_scope_count);
+                force_full = 1;
+                continue;
+            }
+            new_plan = merged;
+        }
+
         if (plan_owned)
             airy_task_plan_free(plan);
         plan = new_plan;
@@ -441,8 +520,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
         }
     }
 
-    if (delta_scope)
-        AIRY_FREE(delta_scope);
+    grad_scope_free(&delta_scope, &delta_scope_count);
 
     coord->stats.total_rounds = (uint32_t)coord->rounds_count; /* size_t→u32（C4267） */
     coord->stats.total_time_ns = airy_time_monotonic_ns() - start_ns;

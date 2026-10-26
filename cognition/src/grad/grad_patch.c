@@ -10,7 +10,8 @@
  *   - scope = unique(defects.node_id)，经 grad_compute_closure 一阶闭包
  *     （scope + 全部依赖前驱 + 直接后继，GRAD §6.4 微分熵减）；
  *   - 闭包上界 min(GRAD_PATCH_MAX_NODES, ceil(N/2))，超界返回 AIRY_E2BIG
- *     由协调器整份重绘（repair_mode=full）；
+ *     由协调器整份重绘（grad_patch_full，repair_mode=full 且
+ *     affected_scope 为全部节点，G55 仍要求 scope 非空）；
  *   - 空 defects / 节点不可定位 / 空 scope 一律 AIRY_EINVAL（G55：模板
  *     patch 不触发重绘，交由 C 硬判定收敛）。
  *
@@ -375,12 +376,16 @@ airy_err_t grad_patch_scope(const airy_task_plan_t *plan, const grad_defect_t *d
 
 /* ---------------- B_Model 修补 patch JSON ---------------- */
 
-airy_err_t grad_patch_build(uint32_t iteration, const grad_defect_t *defects,
-                            size_t defect_count, const char *const *scope,
-                            size_t scope_count, char **out_json)
+/* 增量/整份重绘共用序列化：mode 由调用方裁定，scope 必须非空
+ * （G55：affected_scope 为空即模板 patch）。 */
+static airy_err_t patch_emit(uint32_t iteration, const char *mode,
+                             const grad_defect_t *defects, size_t defect_count,
+                             const char *const *scope, size_t scope_count, char **out_json)
 {
-    if (!defects || defect_count == 0 || !scope || scope_count == 0 || !out_json)
-        return AIRY_EINVAL; /* G55：空 scope 模板 patch 一律拒绝 */
+    if (!mode || !scope || scope_count == 0 || !out_json)
+        return AIRY_EINVAL;
+    if (!defects && defect_count > 0)
+        return AIRY_EINVAL;
     *out_json = NULL;
 
     size_t cap = 256;
@@ -397,8 +402,9 @@ airy_err_t grad_patch_build(uint32_t iteration, const grad_defect_t *defects,
 
     pbuf_puts(&b, "{\"patch_id\":\"B_");
     pbuf_put_u32(&b, iteration);
-    pbuf_puts(&b, "\",\"source\":\"B_Model\",\"repair_mode\":\"incremental\","
-                  "\"affected_scope\":[");
+    pbuf_puts(&b, "\",\"source\":\"B_Model\",\"repair_mode\":\"");
+    pbuf_puts(&b, mode);
+    pbuf_puts(&b, "\",\"affected_scope\":[");
     for (size_t i = 0; i < scope_count; i++) {
         if (i)
             pbuf_putc(&b, ',');
@@ -428,6 +434,45 @@ airy_err_t grad_patch_build(uint32_t iteration, const grad_defect_t *defects,
     }
     *out_json = b.buf;
     return AIRY_SUCCESS;
+}
+
+airy_err_t grad_patch_build(uint32_t iteration, const grad_defect_t *defects,
+                            size_t defect_count, const char *const *scope,
+                            size_t scope_count, char **out_json)
+{
+    if (!defects || defect_count == 0)
+        return AIRY_EINVAL; /* G55：空 defects / 空 scope 模板 patch 一律拒绝 */
+    return patch_emit(iteration, "incremental", defects, defect_count, scope, scope_count,
+                      out_json);
+}
+
+airy_err_t grad_patch_full(const airy_task_plan_t *plan, uint32_t iteration,
+                           const grad_defect_t *defects, size_t defect_count, char **out_json)
+{
+    if (!plan || !out_json)
+        return AIRY_EINVAL;
+    *out_json = NULL;
+    size_t n = plan->task_plan_node_count;
+    if (n == 0 || !plan->task_plan_nodes)
+        return AIRY_EINVAL;
+
+    const char **all = (const char **)AIRY_CALLOC(n, sizeof(char *));
+    if (!all)
+        return AIRY_ENOMEM;
+
+    airy_err_t rc = AIRY_SUCCESS;
+    for (size_t i = 0; i < n; i++) {
+        const airy_task_node_t *tn = plan->task_plan_nodes[i];
+        if (!tn || !tn->task_node_id) {
+            rc = AIRY_EINVAL;
+            break;
+        }
+        all[i] = tn->task_node_id;
+    }
+    if (rc == AIRY_SUCCESS)
+        rc = patch_emit(iteration, "full", defects, defect_count, all, n, out_json);
+    AIRY_FREE(all);
+    return rc;
 }
 
 /* ---------------- 计划合并（§5.2b.3 merge） ---------------- */
