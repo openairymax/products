@@ -134,11 +134,15 @@ static void test_propose_admit_gates(void)
     CHECK(canary_propose(c, &b) == -1); /* >200 行 */
     canary_free(c);
 
+    /* G30 准入分类学：-1 输入非法（空度量），-2 超限不满足灰度条件 */
     CHECK(canary_admit(150, 200) == 0);
-    CHECK(canary_admit(151, 200) == -1); /* 新增函数 151 行 */
-    CHECK(canary_admit(150, 201) == -1);
+    CHECK(canary_admit(100, 0) == 0); /* 纯新增：独立判据内合法 */
     CHECK(canary_admit(0, 200) == 0); /* 纯修改补丁：零新函数合法 */
-    CHECK(canary_admit(0, 201) == -1); /* 纯修改 201 行 */
+    CHECK(canary_admit(0, 0) == -1);
+    CHECK(canary_admit(151, 200) == -2); /* 新增函数 151 行 */
+    CHECK(canary_admit(150, 201) == -2);
+    CHECK(canary_admit(201, 0) == -2); /* 纯新增超限 */
+    CHECK(canary_admit(0, 201) == -2); /* 纯修改 201 行 */
 
     g = (canary_gates_t){0};
     g.ok_pm = 9990;
@@ -169,6 +173,72 @@ static void test_propose_admit_gates(void)
     g.perf_ppm = 0;
     CHECK(canary_gates(&g) == CANARY_K_UNKNOWN);
     CHECK(canary_gates(NULL) == -1);
+}
+
+/* 账本申报：lines/fn_new/fn_mod 落 manifest；无 diff 来源标注
+ * unmeasured（禁止代理量冒充实测量）；标记路径（replay_pending）
+ * 透传原申报不丢失 */
+static void test_manifest_decl(void)
+{
+    char root[128], path[512];
+    char text[1024];
+    canary_t *c = NULL;
+    canary_blast_t b;
+    uint8_t h[32], bad[32];
+    FILE *f;
+    size_t n;
+
+    tmp_root(root, sizeof(root));
+    ut_cleanup(root);
+    CHECK(canary_new(&c, root, "ut") == 0);
+    b = (canary_blast_t){0};
+    b.module = "ut";
+    b.files = UT_FILES;
+    b.nfiles = 1;
+    CHECK(canary_propose(c, &b) == 0); /* 全零申报：unmeasured 合法 */
+    CHECK(canary_to_shadow(c) == 0 && canary_to_canary(c, 0) == 0);
+    sha256_buf("v1", 2, h);
+    CHECK(canary_adopt(c, h, 1) == 0);
+    snprintf(path, sizeof(path),
+             "%s/local/evolve/ut/canary.manifest", root);
+    f = fopen(path, "rb");
+    CHECK(f != NULL);
+    n = fread(text, 1, sizeof(text) - 1, f);
+    text[n] = '\0';
+    fclose(f);
+    CHECK(strstr(text, "lines=unmeasured\n") != NULL);
+    CHECK(strstr(text, "fn_new=unmeasured\n") != NULL);
+    CHECK(strstr(text, "fn_mod=unmeasured\n") != NULL);
+    canary_free(c);
+
+    /* 实测申报写实数；base 失配标记后申报保留 */
+    CHECK(canary_new(&c, root, "ut") == 0);
+    b.lines = 120;
+    b.fn_new = 30;
+    b.fn_mod = 180;
+    CHECK(canary_propose(c, &b) == 0);
+    CHECK(canary_to_shadow(c) == 0 && canary_to_canary(c, 0) == 0);
+    CHECK(canary_adopt(c, h, 2) == 0);
+    f = fopen(path, "rb");
+    CHECK(f != NULL);
+    n = fread(text, 1, sizeof(text) - 1, f);
+    text[n] = '\0';
+    fclose(f);
+    CHECK(strstr(text, "lines=120\n") != NULL);
+    CHECK(strstr(text, "fn_new=30\n") != NULL);
+    CHECK(strstr(text, "fn_mod=180\n") != NULL);
+    sha256_buf("v2", 2, bad);
+    CHECK(canary_verify(c, bad) == -2); /* 失配 → 待重放 */
+    f = fopen(path, "rb");
+    CHECK(f != NULL);
+    n = fread(text, 1, sizeof(text) - 1, f);
+    text[n] = '\0';
+    fclose(f);
+    CHECK(strstr(text, "state=replay_pending\n") != NULL);
+    CHECK(strstr(text, "lines=120\n") != NULL);
+    CHECK(strstr(text, "fn_mod=180\n") != NULL);
+    canary_free(c);
+    ut_cleanup(root);
 }
 
 static void test_flow(void)
@@ -374,6 +444,7 @@ int main(void)
 
     test_sha256();
     test_propose_admit_gates();
+    test_manifest_decl();
     test_flow();
     test_rollback();
     tmp_root(root, sizeof(root));

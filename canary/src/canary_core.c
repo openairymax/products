@@ -85,20 +85,22 @@ int canary_propose(canary_t *c, const canary_blast_t *b)
 {
     if (!c || !b || !b->module || !b->files || b->nfiles == 0)
         return -1;
-    if (b->nfiles > CANARY_MAX_FILES || b->lines == 0 ||
-        b->lines > CANARY_MAX_LINES)
+    if (b->nfiles > CANARY_MAX_FILES || b->lines > CANARY_MAX_LINES)
         return -1;
     if (strcmp(b->module, c->module) != 0)
         return -1;
+    c->dcl_lines = b->lines;
+    c->dcl_fn_new = b->fn_new;
+    c->dcl_fn_mod = b->fn_mod;
     return move(c, CANARY_ST_PROPOSED);
 }
 
 int canary_admit(size_t new_fn, size_t mod_fn)
 {
-    if (new_fn > CANARY_FN_NEW_MAX)
-        return -1;
-    if (mod_fn == 0 || mod_fn > CANARY_FN_MOD_MAX)
-        return -1;
+    if (new_fn == 0 && mod_fn == 0)
+        return -1; /* 输入非法：空度量，宿主报错并降级为无灰度 */
+    if (new_fn > CANARY_FN_NEW_MAX || mod_fn > CANARY_FN_MOD_MAX)
+        return -2; /* 不满足灰度条件：超限，暂不开启 */
     return 0;
 }
 
