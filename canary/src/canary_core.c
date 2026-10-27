@@ -106,6 +106,8 @@ int canary_gates(const canary_gates_t *g)
 {
     if (!g)
         return -1;
+    if (g->ok_pm == 0u || g->perf_ppm == 0u)
+        return CANARY_K_UNKNOWN; /* 无观测样本 */
     if (g->ok_pm < CANARY_OK_FLOOR)
         return -2; /* K1 */
     if (g->perf_ppm < CANARY_PERF_FLOOR)

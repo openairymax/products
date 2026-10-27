@@ -42,6 +42,9 @@ extern "C" {
 #define CANARY_OK_FLOOR 9990u
 #define CANARY_PERF_FLOOR 9500u
 #define CANARY_RB_MAX_SECS 300u
+/* 门禁不可判定（new in 0.1.20）：ok_pm/perf_ppm 为 0 表示无观测
+ * 样本（未知），canary_gates 返回本值；宿主遇之不滚、不推进 */
+#define CANARY_K_UNKNOWN (-8)
 
 /* C0-C4 状态 */
 typedef enum {
@@ -63,7 +66,8 @@ typedef struct {
     size_t lines;
 } canary_blast_t;
 
-/* 门禁指标观测（K1-K6 定量面） */
+/* 门禁指标观测（K1-K6 定量面）。ok_pm/perf_ppm 取 0 表示无观测
+ * 样本（未知），非实测零分；crashes/rb_secs 取 0 为真值（未发生） */
 typedef struct {
     uint32_t ok_pm;   /* K1 正确率 ‱ */
     uint32_t perf_ppm; /* K2 性能保持率 ‱（基线 10000） */
@@ -85,7 +89,8 @@ int canary_propose(canary_t *c, const canary_blast_t *b);
 /* G30 准入：演化补丁函数行数静态校验（W6 canary 准入前执行） */
 int canary_admit(size_t new_fn, size_t mod_fn);
 
-/* 门禁判定：K1-K6 全绿返回 0，否则返回负错误码 */
+/* 门禁判定：K1-K6 全绿返回 0，指标未知返回 CANARY_K_UNKNOWN，
+ * 否则返回 -2..-7 对应 K1-K6 */
 int canary_gates(const canary_gates_t *g);
 
 /* 状态推进（宿主串行调用；to_canary 以真实时钟锚定驻留起点） */

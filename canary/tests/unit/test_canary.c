@@ -161,6 +161,12 @@ static void test_propose_admit_gates(void)
     CHECK(canary_gates(&g) == -6);
     g.flags = CANARY_G_EXPLAIN;
     CHECK(canary_gates(&g) == -7);
+    g.flags = CANARY_G_EXPLAIN | CANARY_G_BOUNDARY;
+    g.ok_pm = 0; /* 无观测样本 → 未知 */
+    CHECK(canary_gates(&g) == CANARY_K_UNKNOWN);
+    g.ok_pm = 9990;
+    g.perf_ppm = 0;
+    CHECK(canary_gates(&g) == CANARY_K_UNKNOWN);
     CHECK(canary_gates(NULL) == -1);
 }
 
