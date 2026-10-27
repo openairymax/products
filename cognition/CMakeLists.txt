@@ -537,6 +537,23 @@ if(BUILD_TESTS)
     endif()
     add_test(NAME cognition_mc_calibration_tests COMMAND test_metacognition_calibration)
 
+    # MC 学习闭环测试（双模式）：验证 detect 不重复累计、feedback 回填
+    # 模式计数、学习策略升级评估结果、preempt 下发预防性指导。
+    add_executable(test_mc_learn_loop tests/unit/test_mc_learn_loop.c)
+    target_compile_definitions(test_mc_learn_loop PRIVATE AIRY_COMPLIANCE_IMPL)
+    target_include_directories(test_mc_learn_loop PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation
+        ${COG_CONTRACT_DIR}
+        ${AIRY_COREKERN_INCLUDE_DIR}
+    )
+    target_link_libraries(test_mc_learn_loop PRIVATE airy_cognition_strategy)
+    if(NOT MSVC)
+        target_link_libraries(test_mc_learn_loop PRIVATE pthread dl m)
+    endif()
+    add_test(NAME cognition_mc_learn_tests COMMAND test_mc_learn_loop)
+
     # 意图解析策略载荷测试（双模式）：被测符号全部为 cognition.h 公开
     # API（airy_intent_parser_*，0.1.19 M5-4 §269 自 atoms 迁入）；
     # 载荷机制侧符号依赖（id_utils/gccp_goal）在 embedded 由

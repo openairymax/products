@@ -121,6 +121,8 @@ airy_err_t airy_mc_stats(airy_metacognition_t *mc, char **out_json)
                  "\"auto_fixes\":%llu,"
                  "\"calibration\":{\"samples\":%zu,\"bias\":%.4f,"
                  "\"overconf_rate\":%.4f,\"underconf_rate\":%.4f},"
+                 "\"learning\":{\"patterns\":%zu,\"detected\":%llu,"
+                 "\"preemptive\":%llu,\"effectiveness\":%.4f},"
                  "\"records\":%zu}",
                  (unsigned long long)mc->total_evaluations,
                  (unsigned long long)mc->total_corrections,
@@ -130,6 +132,8 @@ airy_err_t airy_mc_stats(airy_metacognition_t *mc, char **out_json)
                      mc->calibrator.calibration_sum / (float)mc->calibrator.calibration_count :
                      0.0f,
                  mc->calibrator.overconfidence_rate, mc->calibrator.underconfidence_rate,
+                 mc->pattern_count, (unsigned long long)mc->patterns_detected,
+                 (unsigned long long)mc->preemptive_corrections, mc->learning_effectiveness,
                  mc->record_count);
 
     if (written < 0 || (size_t)written >= sizeof(buf)) {

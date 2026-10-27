@@ -264,16 +264,39 @@ airy_err_t airy_mc_evaluate_step(airy_metacognition_t *mc, airy_thinking_step_t 
 
     if (out_result->overall_score >= mc->acceptance_threshold) {
         out_result->strategy = MC_CORRECT_NONE;
-        out_result->severity = MC_SEV_INFO;
     } else if (out_result->overall_score >= mc->auto_correct_threshold) {
         out_result->strategy = MC_CORRECT_AUTO;
-        out_result->severity = MC_SEV_WARNING;
     } else if (out_result->overall_score >= 0.3f) {
         out_result->strategy = MC_CORRECT_RERUN;
-        out_result->severity = MC_SEV_ERROR;
     } else {
         out_result->strategy = MC_CORRECT_ESCALATE;
+    }
+
+    /* 持久学习回流：已知失败模式且学到的纠正更强时升级策略；无匹配
+     * （AIRY_ENOENT）或学到更弱策略时保持本次评分判定不变。 */
+    if (mc->enable_learning && out_result->strategy != MC_CORRECT_NONE &&
+        out_result->strategy != MC_CORRECT_ESCALATE) {
+        char pkey[128];
+        mc_pattern_key(step->type, out_result, pkey, sizeof(pkey));
+        mc_correction_strategy_t learned = MC_CORRECT_NONE;
+        if (airy_mc_learn_best_strategy(mc, pkey, &learned) == AIRY_SUCCESS &&
+            learned > out_result->strategy)
+            out_result->strategy = learned;
+    }
+
+    switch (out_result->strategy) {
+    case MC_CORRECT_NONE:
+        out_result->severity = MC_SEV_INFO;
+        break;
+    case MC_CORRECT_AUTO:
+        out_result->severity = MC_SEV_WARNING;
+        break;
+    case MC_CORRECT_RERUN:
+        out_result->severity = MC_SEV_ERROR;
+        break;
+    default:
         out_result->severity = MC_SEV_CRITICAL;
+        break;
     }
 
     char buf[MC_MAX_CRITIQUE_LEN];
@@ -297,6 +320,7 @@ airy_err_t airy_mc_evaluate_step(airy_metacognition_t *mc, airy_thinking_step_t 
         if (rec->result.critique_text)
             AIRY_FREE((void *)rec->result.critique_text);
         rec->step_id = step->step_id;
+        rec->type = step->type;
         rec->timestamp_ns = mc_time_now();
         __builtin_memcpy(&rec->result, out_result, sizeof(mc_evaluation_result_t));
         if (out_result->critique_text) {

@@ -43,6 +43,7 @@ typedef struct mc_evaluation_record mc_evaluation_record_t;
  */
 struct mc_evaluation_record {
     uint32_t step_id;
+    tc_step_type_t type;
     uint64_t timestamp_ns;
     mc_evaluation_result_t result;
     const char *original_content;

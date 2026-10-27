@@ -45,6 +45,18 @@ extern "C" {
 uint64_t mc_time_now(void);
 float clampf(float v, float lo, float hi);
 
+/* Learning domain (mc_learn.c)，供评估域与校准域复用同一模式键与回填路径 */
+
+/* 按「步型_最弱维_分值」构造失败模式键（detect 与 evaluate 共用唯一形）。 */
+void mc_pattern_key(tc_step_type_t type, const mc_evaluation_result_t *result, char *out,
+                    size_t cap);
+
+/* 查找模式键，返回下标；未找到返回 MC_MAX_PATTERNS。 */
+size_t mc_pattern_lookup(const airy_metacognition_t *mc, const char *key);
+
+/* 用最近一条评估记录回填学习（模式计数与策略成功率），仅受 enable_learning 控制。 */
+airy_err_t mc_learn_from_feedback(airy_metacognition_t *mc, int was_correct);
+
 #ifdef __cplusplus
 }
 #endif
