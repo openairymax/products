@@ -51,6 +51,11 @@ airy_err_t airy_mc_feedback(airy_metacognition_t *mc, float predicted_confidence
         AIRY_LOG_ERROR("airy_mc_feedback: NULL mc parameter");
         return AIRY_EINVAL;
     }
+
+    /* 学习闭环先于校准早退：关闭置信度校准不应连带关停模式学习。 */
+    if (mc->enable_learning)
+        (void)mc_learn_from_feedback(mc, was_correct);
+
     if (!mc->enable_confidence_calibration)
         return AIRY_SUCCESS;
 

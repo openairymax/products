@@ -22,12 +22,40 @@ static const char *dim_short_name(mc_dimension_t d)
     return names[(int)d < MC_DIM_COUNT ? (int)d : 0];
 }
 
-static size_t find_or_create_pattern(airy_metacognition_t *mc, const char *key)
+size_t mc_pattern_lookup(const airy_metacognition_t *mc, const char *key)
 {
+    if (!mc || !key)
+        return MC_MAX_PATTERNS;
+
     for (size_t i = 0; i < mc->pattern_count; i++) {
         if (strncmp(mc->patterns[i].pattern_key, key, 127) == 0)
             return i;
     }
+    return MC_MAX_PATTERNS;
+}
+
+void mc_pattern_key(tc_step_type_t type, const mc_evaluation_result_t *result, char *out,
+                    size_t cap)
+{
+    if (!result || !out || cap == 0)
+        return;
+
+    float worst_score = 1.0f;
+    mc_dimension_t worst_dim = MC_DIM_RELEVANCE;
+    for (int d = 0; d < MC_DIM_COUNT; d++) {
+        if (result->dimensions[d].score < worst_score) {
+            worst_score = result->dimensions[d].score;
+            worst_dim = (mc_dimension_t)d;
+        }
+    }
+    snprintf(out, cap, "%s_%s_%.1f", step_type_name(type), dim_short_name(worst_dim), worst_score);
+}
+
+static size_t find_or_create_pattern(airy_metacognition_t *mc, const char *key)
+{
+    size_t found = mc_pattern_lookup(mc, key);
+    if (found < MC_MAX_PATTERNS)
+        return found;
     if (mc->pattern_count >= MC_MAX_PATTERNS)
         return MC_MAX_PATTERNS;
     size_t idx = mc->pattern_count++;
@@ -58,12 +86,11 @@ airy_err_t airy_mc_detect_patterns(airy_metacognition_t *mc, mc_error_pattern_t 
     }
 
     typedef struct {
-        char key[96];
+        char key[128];
         uint64_t total;
         uint64_t fail;
-        mc_dimension_t worst_dim;
     } pattern_acc_t;
-    pattern_acc_t acc[MC_MAX_PATTERNS] = {{{0}, 0, 0, 0}};
+    pattern_acc_t acc[MC_MAX_PATTERNS] = {{{0}, 0, 0}};
     size_t acc_count = 0;
 
     size_t check_n = (mc->record_count > 20) ? 20 : mc->record_count;
@@ -73,24 +100,12 @@ airy_err_t airy_mc_detect_patterns(airy_metacognition_t *mc, mc_error_pattern_t 
             continue;
         mc_evaluation_record_t *rec = &mc->records[idx];
 
-        char pkey[96];
-        int pklen =
-            snprintf(pkey, sizeof(pkey), "%s_", step_type_name((tc_step_type_t)(rec->step_id % 7)));
-
-        float worst_score = 1.0f;
-        mc_dimension_t worst_d = MC_DIM_RELEVANCE;
-        for (int d = 0; d < MC_DIM_COUNT; d++) {
-            if (rec->result.dimensions[d].score < worst_score) {
-                worst_score = rec->result.dimensions[d].score;
-                worst_d = (mc_dimension_t)d;
-            }
-        }
-        pklen += snprintf(pkey + pklen, sizeof(pkey) - pklen, "%s_%.1f", dim_short_name(worst_d),
-                          worst_score);
+        char pkey[128];
+        mc_pattern_key(rec->type, &rec->result, pkey, sizeof(pkey));
 
         size_t aidx = acc_count;
         for (size_t j = 0; j < acc_count; j++) {
-            if (strncmp(acc[j].key, pkey, 95) == 0) {
+            if (strncmp(acc[j].key, pkey, 127) == 0) {
                 aidx = j;
                 break;
             }
@@ -101,30 +116,32 @@ airy_err_t airy_mc_detect_patterns(airy_metacognition_t *mc, mc_error_pattern_t 
         }
         if (aidx < MC_MAX_PATTERNS) {
             acc[aidx].total++;
-            acc[aidx].worst_dim = worst_d;
             if (rec->result.strategy != MC_CORRECT_NONE)
                 acc[aidx].fail++;
         }
     }
 
-    size_t detected = 0;
-    for (size_t i = 0; i < acc_count && detected < MC_MAX_PATTERNS; i++) {
-        if (acc[i].total >= 2 && acc[i].fail >= acc[i].total / 3) {
-            const char *pkey = acc[i].key;
-            size_t pidx = find_or_create_pattern(mc, pkey);
-            if (pidx < MC_MAX_PATTERNS) {
-                mc->patterns[pidx].occurrence_count += acc[i].total;
-                mc->patterns[pidx].failure_count += acc[i].fail;
-                mc->patterns[pidx].failure_rate = (float)mc->patterns[pidx].failure_count /
-                                                  (float)(mc->patterns[pidx].occurrence_count > 0 ?
-                                                              mc->patterns[pidx].occurrence_count :
-                                                              1);
-                mc->patterns[pidx].last_seen_ns = mc_time_now();
-                mc->patterns[pidx].is_active = 1;
-                detected++;
-                mc->patterns_detected++;
-            }
+    /* 检测器只负责「建档 / 刷新活跃度」：新建模式以当前窗口为种子，
+     * 既有模式不再重复累计同一批历史记录，计数增量由 feedback 回填维护。 */
+    for (size_t i = 0; i < acc_count; i++) {
+        if (acc[i].total < 2 || acc[i].fail < acc[i].total / 3)
+            continue;
+
+        size_t pidx = mc_pattern_lookup(mc, acc[i].key);
+        if (pidx >= MC_MAX_PATTERNS) {
+            pidx = find_or_create_pattern(mc, acc[i].key);
+            if (pidx >= MC_MAX_PATTERNS)
+                continue;
+            mc->patterns[pidx].occurrence_count = acc[i].total;
+            mc->patterns[pidx].failure_count = acc[i].fail;
+            mc->patterns_detected++;
         }
+
+        mc_error_pattern_t *pat = &mc->patterns[pidx];
+        pat->failure_rate = (float)pat->failure_count /
+                            (float)(pat->occurrence_count > 0 ? pat->occurrence_count : 1);
+        pat->last_seen_ns = mc_time_now();
+        pat->is_active = 1;
     }
 
     *out_patterns = (mc->pattern_count > 0) ? mc->patterns : NULL;
@@ -142,30 +159,46 @@ airy_err_t airy_mc_learn_best_strategy(airy_metacognition_t *mc, const char *pat
         return AIRY_EINVAL;
     }
 
-    *out_strategy = MC_CORRECT_RERUN;
+    *out_strategy = MC_CORRECT_NONE;
 
-    size_t pidx = MC_MAX_PATTERNS;
-    for (size_t i = 0; i < mc->pattern_count; i++) {
-        if (strncmp(mc->patterns[i].pattern_key, pattern_key, 127) == 0) {
-            pidx = i;
-            break;
-        }
-    }
+    size_t pidx = mc_pattern_lookup(mc, pattern_key);
+    if (pidx >= MC_MAX_PATTERNS)
+        return AIRY_ENOENT;
 
-    if (pidx < MC_MAX_PATTERNS && mc->patterns[pidx].strategy_success_rate > 0.3f) {
+    /* 样本不足时不下发建议：检测窗口种子不等于真实运行证据。 */
+    if (mc->patterns[pidx].occurrence_count < 5)
+        return AIRY_SUCCESS;
+
+    if (mc->patterns[pidx].strategy_success_rate > 0.3f &&
+        mc->patterns[pidx].best_strategy != MC_CORRECT_NONE) {
         *out_strategy = mc->patterns[pidx].best_strategy;
         return AIRY_SUCCESS;
     }
 
-    if (pidx < MC_MAX_PATTERNS && mc->patterns[pidx].failure_rate > 0.8f) {
+    if (mc->patterns[pidx].failure_rate > 0.8f) {
         *out_strategy = MC_CORRECT_ESCALATE;
-    } else if (pidx < MC_MAX_PATTERNS && mc->patterns[pidx].failure_rate > 0.5f) {
+    } else if (mc->patterns[pidx].failure_rate > 0.5f) {
         *out_strategy = MC_CORRECT_RERUN;
     } else {
         *out_strategy = MC_CORRECT_AUTO;
     }
 
     return AIRY_SUCCESS;
+}
+
+airy_err_t mc_learn_from_feedback(airy_metacognition_t *mc, int was_correct)
+{
+    if (!mc || !mc->enable_learning || mc->record_capacity == 0 || mc->record_count == 0)
+        return AIRY_SUCCESS;
+
+    size_t idx = (mc->record_head - 1 + mc->record_capacity) % mc->record_capacity;
+    const mc_evaluation_record_t *rec = &mc->records[idx];
+    if (rec->result.strategy == MC_CORRECT_NONE)
+        return AIRY_SUCCESS;
+
+    char key[128];
+    mc_pattern_key(rec->type, &rec->result, key, sizeof(key));
+    return airy_mc_record_strategy_result(mc, key, rec->result.strategy, was_correct);
 }
 
 int airy_mc_preemptive_check(airy_metacognition_t *mc, tc_step_type_t step_type, const char *input,
@@ -250,10 +283,10 @@ airy_err_t airy_mc_record_strategy_result(airy_metacognition_t *mc, const char *
     pat->occurrence_count++;
     pat->last_seen_ns = mc_time_now();
 
-    if (!success) {
+    if (!success)
         pat->failure_count++;
-        pat->failure_rate = (float)pat->failure_count / (float)pat->occurrence_count;
-    }
+    /* 失败率始终由计数派生：成功样本同样改变分母，只改分子会留下陈旧值。 */
+    pat->failure_rate = (float)pat->failure_count / (float)pat->occurrence_count;
 
     float alpha = 0.3f;
     if (success) {
