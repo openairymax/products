@@ -1,0 +1,22 @@
+{
+  "note": "grad_arb_fail_parse 契约黄金集（C13 §5.2b.11）。plan 指向测试内构造的计划模板（chain3 = N1->N2->N3）；json 为送进解析器的原始文本；expect=valid|invalid；kind/scope/salv/suggestion 为期望解析结果（expect=invalid 时忽略）。",
+  "cases": [
+    {"name": "accept_min", "plan": "chain3", "json": "{\"verdict\":\"accept\"}", "expect": "valid", "kind": "accept", "scope": 0, "salv": 1},
+    {"name": "accept_class", "plan": "chain3", "json": "{\"verdict\":\"accept\",\"defect_class\":\"E-04\",\"suggestion\":\"keep\"}", "expect": "valid", "kind": "accept", "scope": 0, "salv": 1},
+    {"name": "reject_scope", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"E-01\",\"salvageable\":true,\"affected_scope\":[\"N2\"],\"suggestion\":\"fix n2\"}", "expect": "valid", "kind": "reject", "scope": 1, "salv": 1, "suggestion": "fix n2"},
+    {"name": "reject_no_class", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"affected_scope\":[\"N2\"]}", "expect": "invalid"},
+    {"name": "reject_empty_scope", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"SEM\",\"affected_scope\":[]}", "expect": "valid", "kind": "reject", "scope": 0, "salv": 1},
+    {"name": "class_structural", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"structural\",\"affected_scope\":[\"N1\"]}", "expect": "invalid"},
+    {"name": "ghost_scope", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"E-02\",\"affected_scope\":[\"GHOST\"]}", "expect": "valid", "kind": "reject", "scope": 0, "salv": 1},
+    {"name": "dup_scope", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"E-02\",\"affected_scope\":[\"N1\",\"N1\"]}", "expect": "valid", "kind": "reject", "scope": 1, "salv": 1},
+    {"name": "fence", "plan": "chain3", "json": "```json\n{\"verdict\":\"accept\"}\n```", "expect": "invalid"},
+    {"name": "plain_text", "plan": "chain3", "json": "not json", "expect": "invalid"},
+    {"name": "sal_false", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"E-03\",\"salvageable\":false,\"affected_scope\":[\"N3\"]}", "expect": "valid", "kind": "reject", "scope": 1, "salv": 0},
+    {"name": "sal_str", "plan": "chain3", "json": "{\"verdict\":\"accept\",\"salvageable\":\"yes\"}", "expect": "invalid"},
+    {"name": "verdict_maybe", "plan": "chain3", "json": "{\"verdict\":\"maybe\"}", "expect": "invalid"},
+    {"name": "sugg_passthru", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"E-04\",\"affected_scope\":[\"N1\"],\"suggestion\":\"drift here\"}", "expect": "valid", "kind": "reject", "scope": 1, "salv": 1, "suggestion": "drift here"},
+    {"name": "no_verdict", "plan": "chain3", "json": "{\"defect_class\":\"E-01\"}", "expect": "invalid"},
+    {"name": "scope_not_arr", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"E-01\",\"affected_scope\":\"N1\"}", "expect": "invalid"},
+    {"name": "scope_num", "plan": "chain3", "json": "{\"verdict\":\"reject\",\"defect_class\":\"E-01\",\"affected_scope\":[1]}", "expect": "invalid"}
+  ]
+}

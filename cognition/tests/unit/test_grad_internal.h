@@ -131,4 +131,13 @@ void test_patch_build_incremental(void);
 void test_patch_full(void);
 void test_plan_merge_scope(void);
 
+/* GRAD 失败路径 B 定向仲裁域（test_grad_c13.c，0.1.20 C13 / §5.2b.11） */
+void test_c13_e04_calls(void);
+void test_c13_fallback(void);
+void test_c13_patch_invalid(void);
+void test_c13_policy_off(void);
+void test_c13_budget_skip(void);
+void test_c13_j16_stop(void);
+void test_c13_golden(void);
+
 #endif /* TEST_GRAD_INTERNAL_H */

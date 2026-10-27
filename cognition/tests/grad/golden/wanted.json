@@ -1,0 +1,20 @@
+{
+  "note": "grad_arb_fail_wanted 判定黄金集（C13 §5.2b.11）。policy ∈ off|e04_only|full，code ∈ OK|E-01..E-05，node 为 C 报告点名的失败节点（null = 未点名）。expect=1 表示该失败必须调用 B 定向仲裁。",
+  "cases": [
+    {"name": "off_never_calls", "policy": "off", "code": "E-04", "plan": "guard3", "node": "G1", "expect": 0},
+    {"name": "off_e01_guard", "policy": "off", "code": "E-01", "plan": "guard3", "node": "G1", "expect": 0},
+    {"name": "e04_ok_no_call", "policy": "e04_only", "code": "OK", "plan": "chain3", "node": "N1", "expect": 0},
+    {"name": "e04_drift_calls", "policy": "e04_only", "code": "E-04", "plan": "chain3", "node": "N1", "expect": 1},
+    {"name": "e04_e01_on_guard", "policy": "e04_only", "code": "E-01", "plan": "guard3", "node": "G1", "expect": 1},
+    {"name": "e04_e01_on_plain", "policy": "e04_only", "code": "E-01", "plan": "chain3", "node": "N1", "expect": 0},
+    {"name": "e04_e01_ghost", "policy": "e04_only", "code": "E-01", "plan": "chain3", "node": "GHOST", "expect": 0},
+    {"name": "e04_deadlock", "policy": "e04_only", "code": "E-02", "plan": "chain3", "node": null, "expect": 0},
+    {"name": "e04_resource", "policy": "e04_only", "code": "E-03", "plan": "chain3", "node": null, "expect": 0},
+    {"name": "e04_insufficient", "policy": "e04_only", "code": "E-05", "plan": "chain3", "node": null, "expect": 0},
+    {"name": "full_e01", "policy": "full", "code": "E-01", "plan": "chain3", "node": "N2", "expect": 1},
+    {"name": "full_deadlock", "policy": "full", "code": "E-02", "plan": "chain3", "node": null, "expect": 1},
+    {"name": "full_resource", "policy": "full", "code": "E-03", "plan": "chain3", "node": null, "expect": 1},
+    {"name": "full_insufficient", "policy": "full", "code": "E-05", "plan": "chain3", "node": null, "expect": 1},
+    {"name": "full_ok", "policy": "full", "code": "OK", "plan": "chain3", "node": "N1", "expect": 0}
+  ]
+}
