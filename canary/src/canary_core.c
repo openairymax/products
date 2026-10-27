@@ -95,7 +95,7 @@ int canary_propose(canary_t *c, const canary_blast_t *b)
 
 int canary_admit(size_t new_fn, size_t mod_fn)
 {
-    if (new_fn == 0 || new_fn > CANARY_FN_NEW_MAX)
+    if (new_fn > CANARY_FN_NEW_MAX)
         return -1;
     if (mod_fn == 0 || mod_fn > CANARY_FN_MOD_MAX)
         return -1;
