@@ -427,5 +427,7 @@ void test_progress_events(void)
         TEST_FAIL("progress events", msg);
     }
     airy_grad_coordinator_destroy(coord);
+    if (final)
+        free_plan(final); /* G53：过门 seed 深拷贝为 OWNER */
     free_plan(seed);
 }
