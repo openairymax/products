@@ -49,7 +49,10 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
     llm_cfg.max_tokens = (int)ctx->max_tokens;
     if (llm_cfg.max_tokens == 0)
         llm_cfg.max_tokens = 4096;
-    llm_cfg.stream = 0;
+    /* T4（0.1.20）：流式位可配置（launch 透传）。机制闭包在 cfg->stream
+     * 且回调就位时走流式分派，chunk 供 TTFB 计量与 U6 展示；聚合响应
+     * 与非流式同构，下方 C11 完整性检查两态共用。 */
+    llm_cfg.stream = ctx->stream ? 1 : 0;
 
     /* 响应释放入口来自注入的 LLM ops 表（llm_d），表缺失时跳过释放。 */
     const airy_llm_ops_t *llm_ops = are_ops_get_llm();

@@ -109,6 +109,10 @@ void test_progress_events(void);
 void test_grad_role_usage(void);
 void test_grad_c11_contract(void);
 
+/* 0.1.20 T3/T4 请求契约（test_grad_misc.c） */
+void test_grad_t3_patch_prompt(void);
+void test_grad_t4_stream(void);
+
 /* GRAD 计划 schema v1 校验域（test_grad_schema.c，0.1.20 C1） */
 void test_schema_valid_full(void);
 void test_schema_optional_metadata(void);

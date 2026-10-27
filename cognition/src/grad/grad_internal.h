@@ -372,6 +372,13 @@ typedef struct grad_llm_ctx {
      * 注入 "Previous rounds" 段，避免重复提交同一缺陷。 */
     char a_hist[GRAD_ARBITER_MAX_HISTORY][GRAD_ARBITER_HIST_LINE];
     uint32_t a_hist_count;
+
+    /* 0.1.20 T3/T4（launch 快照透传，尾部追加）：
+     * incremental_patch=1 时驳回轮 prompt 要求 Δ 渲染（仅受影响节点子集，
+     * 协调器 merge 承接）；0 回退全量重绘文案。stream=1 时请求带流式位，
+     * chunk 经机制闭包透出（TTFB/U6），聚合响应仍过 C11 完整性检查。 */
+    uint32_t incremental_patch;
+    int stream;
 } grad_llm_ctx_t;
 
 /**

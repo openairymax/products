@@ -4,7 +4,8 @@
 /*
  * test_grad_misc.c
  *   GRAD 杂项测试域：驳回补丁构造与 JSON 序列化、边界条件健壮性、
- *   决策链事件流（progress_cb）可见性。
+ *   决策链事件流（progress_cb）可见性、0.1.20 T3/T4 请求契约
+ *   （Δ 渲染 prompt 分派 + 流式位透传）。
  */
 
 #include "test_grad_internal.h"
@@ -243,6 +244,136 @@ void test_grad_role_usage(void)
                  ctx.usage[AIRY_GRAD_ROLE_B].prompt, ctx.usage[AIRY_GRAD_ROLE_B].completion,
                  ctx.usage[AIRY_GRAD_ROLE_B].total);
         TEST_FAIL("role usage isolation", msg);
+    }
+}
+
+/* T3/T4 契约 fake：在 complete 调用窗口内捕获请求要素（llm_cfg 为
+ * grad_llm_call 栈变量，complete 返回后即失效，禁止事后回读），
+ * 返回最小合法 plan JSON 保证 s2_plan 走真实解析路径。 */
+typedef struct {
+    int stream;
+    char user_prompt[4096];
+    int truncated;
+} t34_fake_t;
+
+static llm_response_t g_t34_resp;
+static llm_message_t g_t34_choices[1];
+
+static int t34_fake_complete(void *ctx, const llm_request_config_t *cfg, llm_response_t **out)
+{
+    t34_fake_t *f = (t34_fake_t *)ctx;
+    f->stream = cfg->stream;
+    f->user_prompt[0] = '\0';
+    f->truncated = 0;
+    if (cfg->message_count >= 2 && cfg->messages[1].content) {
+        size_t cap = sizeof(f->user_prompt);
+        size_t need = strlen(cfg->messages[1].content);
+        size_t take = need >= cap ? cap - 1 : need;
+        __builtin_memcpy(f->user_prompt, cfg->messages[1].content, take);
+        f->user_prompt[take] = '\0';
+        f->truncated = (take != need);
+    }
+    g_t34_choices[0].role = "assistant";
+    g_t34_choices[0].content =
+        "{\"nodes\":[{\"id\":\"S_01\",\"goal\":\"fix\",\"role\":\"act\",\"depends\":[]}],"
+        "\"entry\":[\"S_01\"]}";
+    __builtin_memset(&g_t34_resp, 0, sizeof(g_t34_resp));
+    g_t34_resp.choices = g_t34_choices;
+    g_t34_resp.choice_count = 1;
+    g_t34_resp.finish_reason = (char *)"stop";
+    *out = &g_t34_resp;
+    return 0;
+}
+
+void test_grad_t3_patch_prompt(void)
+{
+    static const char *PATCH =
+        "{\"patch_id\":\"p1\",\"source\":\"C_Model\",\"error_code\":\"E-01\","
+        "\"affected_scope\":[\"S_01\"],\"missing_artifact\":\"x\",\"suggestion\":\"fix\"}";
+    char msg[160];
+
+    /* ON：驳回轮 prompt 走 Δ 渲染契约（T3 结构优先，G61 主手段）——
+     * 只回 affected_scope 子集，禁止全量重绘文案。 */
+    grad_llm_ctx_t ctx;
+    t34_fake_t fake;
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    __builtin_memset(&fake, 0, sizeof(fake));
+    ctx.complete = t34_fake_complete;
+    ctx.complete_ctx = &fake;
+    ctx.plan_id = "t3_test";
+    ctx.incremental_patch = 1u;
+
+    airy_task_plan_t *plan = NULL;
+    airy_err_t err = grad_llm_s2_plan(NULL, PATCH, &plan, &ctx);
+    TEST_CHECK(err == AIRY_SUCCESS && plan, "incremental s2_plan failed");
+    free_plan(plan);
+    if (fake.truncated) {
+        TEST_FAIL("t3 delta prompt", "captured prompt truncated");
+        return;
+    }
+    if (strstr(fake.user_prompt, "Output ONLY a patch plan JSON") &&
+        strstr(fake.user_prompt, "affected_scope") &&
+        !strstr(fake.user_prompt, "Generate the FULL corrected plan")) {
+        TEST_PASS("delta render contract on");
+    } else {
+        snprintf(msg, sizeof(msg), "prompt head: %.100s", fake.user_prompt);
+        TEST_FAIL("t3 delta prompt", msg);
+    }
+
+    /* OFF：回退全量重绘文案（回退开关路径不得为死代码）。 */
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    __builtin_memset(&fake, 0, sizeof(fake));
+    ctx.complete = t34_fake_complete;
+    ctx.complete_ctx = &fake;
+    ctx.plan_id = "t3_test";
+
+    plan = NULL;
+    err = grad_llm_s2_plan(NULL, PATCH, &plan, &ctx);
+    TEST_CHECK(err == AIRY_SUCCESS && plan, "full s2_plan failed");
+    free_plan(plan);
+    if (strstr(fake.user_prompt, "Generate the FULL corrected plan") &&
+        !strstr(fake.user_prompt, "Output ONLY a patch plan JSON")) {
+        TEST_PASS("full redraw fallback off");
+    } else {
+        TEST_FAIL("t3 full fallback", "unexpected prompt contract");
+    }
+}
+
+void test_grad_t4_stream(void)
+{
+    grad_llm_ctx_t ctx;
+    t34_fake_t fake;
+    char *text = NULL;
+    size_t len = 0;
+
+    /* ON：ctx->stream 透传为请求流式位（chunk 消费面在机制闭包）。 */
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    __builtin_memset(&fake, 0, sizeof(fake));
+    ctx.complete = t34_fake_complete;
+    ctx.complete_ctx = &fake;
+    ctx.stream = 1;
+
+    airy_err_t err = grad_llm_call(&ctx, "sys", "usr", "model", AIRY_GRAD_ROLE_A, &text, &len);
+    TEST_CHECK(err == AIRY_SUCCESS && text, "stream call failed");
+    AIRY_FREE(text);
+    if (fake.stream == 1) {
+        TEST_PASS("stream bit passed through");
+    } else {
+        TEST_FAIL("t4 stream", "expected stream=1");
+    }
+
+    /* OFF：缺省安全（0 缺省），非流式路径字节级不变。 */
+    __builtin_memset(&fake, 0, sizeof(fake));
+    ctx.stream = 0;
+    text = NULL;
+    len = 0;
+    err = grad_llm_call(&ctx, "sys", "usr", "model", AIRY_GRAD_ROLE_A, &text, &len);
+    TEST_CHECK(err == AIRY_SUCCESS && text, "non-stream call failed");
+    AIRY_FREE(text);
+    if (fake.stream == 0) {
+        TEST_PASS("stream off stays zero");
+    } else {
+        TEST_FAIL("t4 stream off", "expected stream=0");
     }
 }
 

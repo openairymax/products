@@ -48,6 +48,9 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     grad_ctx.original_input_len = launch->input_len;
     grad_ctx.workspace_root = launch->workspace_root;
     grad_ctx.plan_id = launch->plan_id;
+    /* 0.1.20 T3/T4：增量 patch 与流式位经 launch 快照透传（0 缺省安全）。 */
+    grad_ctx.incremental_patch = launch->incremental_patch ? 1u : 0u;
+    grad_ctx.stream = launch->stream ? 1 : 0;
 
     airy_err_t trace_err = grad_llm_trace_open(&grad_ctx);
     if (trace_err != AIRY_SUCCESS)
