@@ -202,6 +202,9 @@ airy_err_t grad_mock_arbiter(const airy_gccp_goal_t *goal, const airy_grad_repor
 int main(void)
 {
     printf("\n=== GRAD Protocol Tests ===\n");
+    /* C12 并发闸单例：直调 grad_llm_call 的用例不经 grad_run 装配，
+     * main 先行初始化（与 daemon prepare 期同语义，幂等）。 */
+    grad_ctxb_sem_init();
     RUN_TEST(test_e02_deadlock);
     RUN_TEST(test_e01_causal);
     RUN_TEST(test_e03_resource);
@@ -244,6 +247,13 @@ int main(void)
     RUN_TEST(test_c13_budget_skip);
     RUN_TEST(test_c13_j16_stop);
     RUN_TEST(test_c13_golden);
+    RUN_TEST(test_ctxb_est);
+    RUN_TEST(test_ctxb_resolve_off);
+    RUN_TEST(test_ctxb_resolve);
+    RUN_TEST(test_ctxb_k_update);
+    RUN_TEST(test_ctxb_char_cap);
+    RUN_TEST(test_ctxb_sem_gate);
+    RUN_TEST(test_ctxb_sem_cap_grows);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
            tests_failed);

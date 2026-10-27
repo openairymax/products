@@ -175,6 +175,8 @@ set(COGNITION_SOURCES
     src/grad/grad_llm_s2_plan.c
     src/grad/grad_llm_s1_arbiter.c
     src/grad/grad_run.c
+    # GRAD C12 上下文预算域（0.1.20 §5.2b.9，n_ctx_slot 派生 + 并发闸）
+    src/grad/grad_ctx_budget.c
     # GRAD 计划 schema v1 校验（0.1.20 C1，plan_schema.h 为权威源）
     src/grad/plan_schema.c
     # GRAD 计划缺省元数据推导（0.1.20 C4）
@@ -488,6 +490,7 @@ if(BUILD_TESTS)
         tests/unit/test_grad_metadata.c
         tests/unit/test_grad_patch.c
         tests/unit/test_grad_c13.c
+        tests/unit/test_grad_c12.c
         ${COG_GRAD_TEST_SRCS})
     target_compile_definitions(test_grad_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
     if(_cog_cjson_libs)

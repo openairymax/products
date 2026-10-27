@@ -176,19 +176,6 @@ static void grad_fo_free(grad_fail_out_t *o)
     o->arb[0] = '\0';
 }
 
-/**
- * @brief 输入片段 token 近似（§5.2b.9：est_tokens = ceil(utf8_bytes/3)）。
- *
- * 真实预算的上界须由 C12 的 n_ctx_slot 派生（per-slot prompt_budget），
- * 本值仅用于把"这一轮 B 会吃掉多少上下文"计入 A 历史与统计，非上界。
- */
-static int64_t grad_est_tokens(const char *s)
-{
-    if (!s || !s[0])
-        return 0;
-    return (int64_t)((strlen(s) + 2) / 3);
-}
-
 /* 计划内按 id 查节点（失败节点全文注入的前提；查不到即 B 盲判，须跳过） */
 static const airy_task_node_t *grad_node_find(const airy_task_plan_t *plan, const char *id)
 {
@@ -346,9 +333,11 @@ static airy_err_t grad_fail_arb(airy_grad_coordinator_t *coord, const airy_gccp_
     in.neighbors_json = nbr_json;
     in.round = k;
     in.round_history_json = hist_json;
-    in.token_budget = grad_est_tokens(goal_json) + grad_est_tokens(c_report) +
-                      grad_est_tokens(fnode_json) + grad_est_tokens(nbr_json) +
-                      grad_est_tokens(hist_json);
+    /* §5.2b.9：token 近似统一走 C12 est（ceil(utf8_bytes/3)）；
+     * 真实预算上界由 n_ctx_slot 派生，此处仅供 A 历史与统计。 */
+    in.token_budget = (int64_t)(grad_ctxb_est(goal_json) + grad_ctxb_est(c_report) +
+                                grad_ctxb_est(fnode_json) + grad_ctxb_est(nbr_json) +
+                                grad_ctxb_est(hist_json));
 
     char *verdict = NULL;
     coord->stats.arbiter_failure_calls++;

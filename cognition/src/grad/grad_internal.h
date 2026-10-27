@@ -79,6 +79,24 @@ extern "C" {
 #define GRAD_HIST_CODES_MAX 128             /**< 单轮缺陷码序列串上界 */
 
 /**
+ * @brief C12 上下文预算（0.1.20 §5.2b.9）。
+ *
+ * 由 launch.n_ctx_slot（服务端 context window）派生；n_ctx_slot=0 时
+ * 域关闭（char_cap 回退 GRAD_ARBITER_PROMPT_MAX_CHARS，sem 不设限——
+ * 回滚开关：D2-9 接线前全部字段为 0，零行为变化）。
+ */
+typedef struct grad_ctx_budget {
+    uint32_t n_ctx_slot;         /**< 服务端 context window（token；0=off） */
+    uint32_t reserve_completion; /**< 响应预留 = min(req_max_tokens, n_ctx_slot/4) */
+    uint32_t prompt_budget;      /**< prompt 预算 = n_ctx_slot - reserve_completion */
+    uint32_t send_budget;        /**< 单次发送预算 = prompt_budget/(k×1.1) */
+    double k;                    /**< est→真实 prompt token 膨胀系数（EWMA） */
+} grad_ctx_budget_t;
+
+/** @brief 并发闸排队超时（ms）：超出即 AIRY_EBUSY（fail-closed）。 */
+#define GRAD_INFLIGHT_QUEUE_MS 15000u
+
+/**
  * @brief C 侧失败后是否启用 B 定向仲裁（C13 §5.2b.11）。
  *
  * OFF：完全不调 B（保持 0.1.19 行为）；E04_ONLY：仅 E-04 目的漂移
@@ -379,6 +397,12 @@ typedef struct grad_llm_ctx {
      * chunk 经机制闭包透出（TTFB/U6），聚合响应仍过 C11 完整性检查。 */
     uint32_t incremental_patch;
     int stream;
+
+    /* 0.1.20 C12（launch 快照透传，尾部追加）：n_ctx_slot=0 时域关闭。
+     * max_concurrent/server_parallel 收口进程级 LLM 出口并发闸。 */
+    grad_ctx_budget_t ctxb;
+    uint32_t max_concurrent;
+    uint32_t server_parallel;
 } grad_llm_ctx_t;
 
 /**
@@ -442,6 +466,17 @@ int grad_ws_mkdir(const char *path);
 char *grad_ws_dir(const grad_llm_ctx_t *ctx);
 int grad_ws_write_file(const char *dir, const char *sub, const char *name, const char *data,
                        size_t data_len);
+
+/* grad_ctx_budget.c — C12 上下文预算域（0.1.20 §5.2b.9） */
+size_t grad_ctxb_est(const char *s);
+int grad_ctxb_active(const grad_ctx_budget_t *b);
+void grad_ctxb_resolve(grad_ctx_budget_t *b, uint32_t n_ctx_slot, uint32_t req_max_tokens);
+void grad_ctxb_k_update(grad_ctx_budget_t *b, size_t est, uint32_t actual);
+size_t grad_ctxb_char_cap(const grad_ctx_budget_t *b);
+void grad_ctxb_sem_init(void);
+airy_err_t grad_ctxb_sem_acquire(uint32_t max_concurrent, uint32_t server_parallel,
+                                 uint32_t queue_ms);
+void grad_ctxb_sem_release(void);
 
 /* grad_llm_call.c — LLM 调用域（经 complete 闭包）；role 决定 usage 计量槽 */
 airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *user,
