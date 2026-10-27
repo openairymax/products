@@ -46,6 +46,11 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
     llm_cfg.temperature_set = true;
     llm_cfg.seed = GRAD_SEED;
     llm_cfg.top_p = 1.0f;
+    /* C3：门禁路径显式关闭思考段（r8 联检——推理型模型的思考段是
+     * 裁决不确定性与 verify token 虚高的主源）。能力位由机制面裁剪，
+     * 不支持关闭的厂商族不下发（宁可不发不乱发）。 */
+    llm_cfg.thinking_set = true;
+    llm_cfg.enable_thinking = false;
     llm_cfg.max_tokens = (int)ctx->max_tokens;
     if (llm_cfg.max_tokens == 0)
         llm_cfg.max_tokens = 4096;
@@ -119,10 +124,12 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
     text[len] = '\0';
 
     /* 0.1.20 B1-e：真实 token 消耗按调用角色分槽累计（思考 token 保留），
-     * 供 feedback / 成本复算区分 prefill/decode 归属模型 A/B。 */
+     * 供 feedback / 成本复算区分 prefill/decode 归属模型 A/B。
+     * E5：provider 前缀缓存命中同步分槽累计，cache 命中率可观测。 */
     ctx->usage[role].prompt += resp->prompt_tokens;
     ctx->usage[role].completion += resp->completion_tokens;
     ctx->usage[role].total += resp->total_tokens;
+    ctx->usage[role].cached += resp->cached_tokens;
 
     /* C12：真实 prompt token 回馈 k（EWMA），后续轮次预算收敛到真值。 */
     grad_ctxb_k_update(&ctx->ctxb, est, resp->prompt_tokens);

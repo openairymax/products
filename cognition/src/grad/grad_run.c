@@ -95,6 +95,20 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     out_outcome->converged = grad_stats.converged;
     out_outcome->stats = grad_stats;
 
+    /* E5（0.1.20）：stats.cached_tokens 聚合 = 分角色 cached 求和（与
+     * prompt/completion 同口径，事件流与 trace 共用单一来源）。 */
+    for (int r = 0; r < AIRY_GRAD_ROLE_COUNT; r++)
+        out_outcome->stats.cached_tokens += grad_ctx.usage[r].cached;
+
+    /* C7（0.1.20）：门禁状态机终态——run 出口是唯一裁决点（协调器不知
+     * 降级检出与 fallback 结果）。converged = 零驳回过门；repaired =
+     * 经修复环收敛；fail_closed = 未收敛/降级产物/契约违约/服务故障
+     * （下游统一走人工评审，G45：降级路径终态必非 converged）。 */
+    out_outcome->stats.status = (grad_err == AIRY_SUCCESS)
+                                    ? (grad_stats.rejections == 0 ? GRAD_STATUS_CONVERGED
+                                                                  : GRAD_STATUS_REPAIRED)
+                                    : GRAD_STATUS_FAIL_CLOSED;
+
     /* 0.1.20 B1-e：outcome 回填分角色 usage，聚合三字段 = 各角色求和
      * （对账校验位：聚合与分角色必须自洽，成本复算二选一皆可）。 */
     for (int r = 0; r < AIRY_GRAD_ROLE_COUNT; r++) {
@@ -109,13 +123,16 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
      * rounds/rejections 等元数据同链持久化，可回溯审计。B1-e 起 trace
      * 同时携带分角色明细（a_ 与 b_ 前缀字段），成本报表可对账到模型槽。 */
     {
-        char tok_trace[512];
+        char tok_trace[640];
         snprintf(tok_trace, sizeof(tok_trace),
                  "{\"prompt_tokens\":%u,\"completion_tokens\":%u,\"total_tokens\":%u,"
+                 "\"cached_tokens\":%u,\"digest\":\"%016llx\",\"status\":%u,"
                  "\"a_prompt\":%u,\"a_completion\":%u,\"a_total\":%u,"
                  "\"b_prompt\":%u,\"b_completion\":%u,\"b_total\":%u}",
                  out_outcome->prompt_tokens, out_outcome->completion_tokens,
-                 out_outcome->total_tokens, out_outcome->usage[AIRY_GRAD_ROLE_A].prompt,
+                 out_outcome->total_tokens, out_outcome->stats.cached_tokens,
+                 (unsigned long long)grad_stats.plan_digest, (unsigned)grad_stats.status,
+                 out_outcome->usage[AIRY_GRAD_ROLE_A].prompt,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].completion,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].total,
                  out_outcome->usage[AIRY_GRAD_ROLE_B].prompt,
@@ -138,6 +155,8 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
                           grad_final->task_plan_id);
             airy_task_plan_free(grad_final);
             out_outcome->degraded = 1;
+            /* C7/G45：降级路径终态必非 converged（P1 检出先于状态机出口） */
+            out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
             return AIRY_EFAIL;
         }
         out_outcome->final_plan = grad_final;
@@ -150,6 +169,8 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
         AIRY_LOG_ERROR("GRAD: contract violation (SUCCESS without final_plan) "
                        "— fail-closed, manual review required");
         out_outcome->degraded = 1;
+        /* C7/G45：契约违约路径终态必非 converged */
+        out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
         return AIRY_EFAIL;
     }
     if (grad_final) {

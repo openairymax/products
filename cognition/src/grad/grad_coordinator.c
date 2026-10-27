@@ -88,6 +88,57 @@ static void grad_progress(airy_grad_coordinator_t *coord, int level, const char 
     }
 }
 
+/* E1（0.1.20）：终态计划指纹——FNV-1a 64 over 节点 id/goal 串联（域
+ * 分隔字节防拼接歧义）。同计划同指纹，审计回放可比对"放行的到底是
+ * 哪份计划"；无计划返回 0。节点 id 经 schema 约束为安全字符集。 */
+static uint64_t grad_plan_digest(const airy_task_plan_t *plan)
+{
+    if (!plan)
+        return 0;
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < plan->task_plan_node_count; i++) {
+        const airy_task_node_t *n = plan->task_plan_nodes[i];
+        if (!n)
+            continue;
+        const char *fields[2] = { n->task_node_id, n->task_node_goal };
+        for (int f = 0; f < 2; f++) {
+            const char *s = fields[f];
+            h ^= 0xff;
+            h *= 1099511628211ULL;
+            while (s && *s) {
+                h ^= (unsigned char)*s++;
+                h *= 1099511628211ULL;
+            }
+        }
+    }
+    return h;
+}
+
+/* E1-E5（0.1.20）：驳回影响面事件——B 驳回与 C 失败两条路径共用，
+ * 携带缺陷码、scope 规模与前 8 个节点 id（schema 约束安全字符集，
+ * 无需转义）。审计可回放"驳回的是哪些节点、修补对准了没有"。 */
+static void grad_emit_reject_scope(airy_grad_coordinator_t *coord, uint32_t round,
+                                   const char *code, char *const *scope, size_t scope_count)
+{
+    char buf[384];
+    size_t off = (size_t)snprintf(buf, sizeof(buf),
+                                  "{\"round\":%u,\"code\":\"%s\",\"scope\":%zu,\"nodes\":[",
+                                  (unsigned)round, code ? code : "-", scope_count);
+    if (off >= sizeof(buf))
+        return;
+    size_t shown = scope_count > 8 ? 8 : scope_count;
+    for (size_t i = 0; i < shown && off < sizeof(buf); i++) {
+        int w = snprintf(buf + off, sizeof(buf) - off, "%s\"%s\"",
+                         i ? "," : "", scope[i] ? scope[i] : "");
+        if (w <= 0 || off + (size_t)w >= sizeof(buf))
+            break;
+        off += (size_t)w;
+    }
+    if (off < sizeof(buf) - 1)
+        snprintf(buf + off, sizeof(buf) - off, "]");
+    grad_progress(coord, 1, "grad_reject_scope", buf);
+}
+
 /* 本轮 patch 来源，决定 s2_plan 产物如何落回计划 */
 typedef enum {
     GRAD_PATCH_C = 0, /**< C 判据 patch：整份替换（允许增删节点） */
@@ -751,9 +802,20 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
                         coord->stats.converged = 0;
                         coord->stats.rejections++;
                         pmode = delta_scope_count ? GRAD_PATCH_INCR : GRAD_PATCH_FULL;
+                        grad_emit_reject_scope(coord, k, "B-REJECT", delta_scope,
+                                               delta_scope_count);
                     } else {
                         coord->stats.converged = 1;
                     }
+                } else {
+                    /* C7 R4：成功路径 B 缺席/故障（ERANGE 预算弃权、ENOMEM、
+                     * 服务故障）显式降级。C 的确定性判定仍然成立（B 语义本就
+                     * 是上下文复核），但此前静默吞掉——B 故障在事件流不可归因。 */
+                    coord->stats.arbiter_unavailable++;
+                    char ab[96];
+                    snprintf(ab, sizeof(ab), "{\"round\":%u,\"err\":%d}", (unsigned)k,
+                             (int)arb_err);
+                    grad_progress(coord, 1, "grad_arbiter_unavailable", ab);
                 }
             }
             if (coord->stats.converged) {
@@ -809,6 +871,8 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             }
             AIRY_LOG_INFO("GRAD: round %u rejected (%s) scope=%zu repair=%s", (unsigned)k,
                           airy_grad_error_str(report.error), delta_scope_count, fo.arb);
+            grad_emit_reject_scope(coord, k, grad_error_code(report.error), delta_scope,
+                                   delta_scope_count);
             grad_fo_free(&fo);
             /* 本轮已整份替换计划（C 模板或全量重绘），force_full 已被消费 */
             force_full = 0;
@@ -897,6 +961,8 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
 
     coord->stats.total_rounds = (uint32_t)coord->rounds_count; /* size_t→u32（C4267） */
     coord->stats.total_time_ns = airy_time_monotonic_ns() - start_ns;
+    /* E1（0.1.20）：终态计划指纹（含未收敛轮的最后状态，审计可回放） */
+    coord->stats.plan_digest = grad_plan_digest(plan);
 
     if (out_stats)
         *out_stats = coord->stats;
