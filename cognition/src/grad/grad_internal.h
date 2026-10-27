@@ -76,6 +76,74 @@ extern "C" {
 #define GRAD_ARBITER_MAX_DEFECTS 32         /**< defects[] 解析上界（超出截断） */
 #define GRAD_ARBITER_MAX_HISTORY 3          /**< round_history[] 保留轮数 */
 #define GRAD_ARBITER_HIST_LINE 128          /**< 单条历史行长 */
+#define GRAD_HIST_CODES_MAX 128             /**< 单轮缺陷码序列串上界 */
+
+/**
+ * @brief C 侧失败后是否启用 B 定向仲裁（C13 §5.2b.11）。
+ *
+ * OFF：完全不调 B（保持 0.1.19 行为）；E04_ONLY：仅 E-04 目的漂移
+ * 触发（默认，避免每次硬逻辑失败都多付一次仲裁）；FULL：任意非 OK
+ * 失败码都调 B。
+ */
+typedef enum airy_grad_aof {
+    AIRY_GRAD_AOF_OFF = 0,
+    AIRY_GRAD_AOF_E04_ONLY,
+    AIRY_GRAD_AOF_FULL
+} airy_grad_aof_t;
+
+/** @brief A 侧单轮失败历史条目（环形保留最近 GRAD_ARBITER_MAX_HISTORY 条）。 */
+typedef struct grad_round_hist {
+    uint32_t round;
+    char codes[GRAD_HIST_CODES_MAX]; /**< 逗号分隔的缺陷码序列 */
+    char **scope;                    /**< OWNER（顶层与元素） */
+    size_t scope_count;
+} grad_round_hist_t;
+
+/** @brief 轮次注记（协调器 → A 侧历史记忆写入；全部 BORROW）。 */
+typedef struct grad_round_note {
+    uint32_t round;
+    const char *codes;         /**< "E-01,E-05"；空串表示无缺陷码 */
+    const char *const *scope;  /**< affected_scope */
+    size_t scope_count;
+    const char *arbiter;       /**< reject(structural) | skipped_budget | accept */
+} grad_round_note_t;
+
+/**
+ * @brief A 侧历史记忆写入回调（C13 决策③）。
+ *
+ * 协调器每轮结束后调用，把 {round, defect_codes[], affected_scope[],
+ * arbiter} 推入 A 的上下文；下一轮 A 生成/修补 prompt 时注入
+ * "Previous rounds" 段。
+ */
+typedef airy_err_t (*grad_round_note_fn)(void *ctx, const grad_round_note_t *note);
+
+/**
+ * @brief C 失败后 B 定向仲裁的输入契约 v2（C13 §5.2b.11 权威七字段）。
+ *
+ * 消偏三规则（§5.2b.11）：①不给 B 看自己上轮 verdict 原文，只给
+ * defect_codes[]；②必须给 B 看 C 完整 report（含 affected_node 与
+ * errors[]）；③必须给 B 看失败节点正文（否则 E-04 盲判）。
+ * 全部字符串 BORROW，由协调器在本轮内构造并保证存活。
+ */
+typedef struct grad_arb_fail_in {
+    const char *goal_json;          /**< GCCP 目标 */
+    const char *c_report_json;      /**< C 报告（派生 errors[] 数组） */
+    const char *failed_node_json;   /**< 失败节点自身（深度 1） */
+    const char *neighbors_json;     /**< 直接前驱 + 直接后继，各限 4 */
+    uint32_t round;
+    const char *round_history_json; /**< ≤3 条 {round,defect_codes[],affected_scope[]} */
+    int64_t token_budget;           /**< 近似预算（非上界） */
+} grad_arb_fail_in_t;
+
+/**
+ * @brief C 失败后 B 的定向仲裁回调（C13）。
+ *
+ * 返回 AIRY_SUCCESS 且 *out_verdict 非 NULL 表示 B 给出裁决；返回
+ * AIRY_SUCCESS 且 *out_verdict==NULL 表示放弃豁免（按 C 的硬逻辑
+ * 失败处理）。
+ */
+typedef airy_err_t (*grad_s1_failure_fn)(const grad_arb_fail_in_t *in,
+                                         char **out_verdict, void *user_data);
 
 /**
  * @brief Plan generation callback (model A, t2).
@@ -126,6 +194,11 @@ typedef struct airy_grad_config {
     /* 阶段进度回调（可为 NULL）：GRAD 各模型回合对上层可见（决策链） */
     grad_progress_fn progress_cb;
     void *progress_user_data;
+    /* C13：C 报错后的 B 定向仲裁（默认仅 E-04）+ A 侧历史记忆 */
+    grad_s1_failure_fn s1_failure;
+    uint32_t arbiter_on_failure;
+    grad_round_note_fn round_note_cb;
+    void *round_note_user_data;
 } airy_grad_config_t;
 
 #define AIRY_GRAD_CONFIG_DEFAULTS                \
@@ -136,7 +209,11 @@ typedef struct airy_grad_config {
      .s2_user_data = NULL,                       \
      .s1_user_data = NULL,                       \
      .progress_cb = NULL,                        \
-     .progress_user_data = NULL}
+     .progress_user_data = NULL,                 \
+     .s1_failure = NULL,                         \
+     .arbiter_on_failure = AIRY_GRAD_AOF_E04_ONLY, \
+     .round_note_cb = NULL,                      \
+     .round_note_user_data = NULL}
 
 /**
  * @brief Single-round verification/fix record (decision-chain log unit).
@@ -289,6 +366,12 @@ typedef struct grad_llm_ctx {
      * GRAD_ARBITER_MAX_HISTORY 条，避免 B 在后续轮次重复同一驳回。 */
     char round_hist[GRAD_ARBITER_MAX_HISTORY][GRAD_ARBITER_HIST_LINE];
     uint32_t round_hist_count;
+
+    /* C13 决策③：A 侧历史记忆（与上方 B 侧 round_hist 独立）——
+     * 每轮失败后由协调器经 round_note_cb 写入，A 的修补 prompt
+     * 注入 "Previous rounds" 段，避免重复提交同一缺陷。 */
+    char a_hist[GRAD_ARBITER_MAX_HISTORY][GRAD_ARBITER_HIST_LINE];
+    uint32_t a_hist_count;
 } grad_llm_ctx_t;
 
 /**
@@ -498,7 +581,84 @@ airy_err_t grad_verdict_parse(const char *json, const airy_task_plan_t *plan,
  */
 void grad_verdict_free(grad_verdict_t *v);
 
+/* grad_verdict.c — C13 失败路径仲裁契约（§5.2b.11） */
+
+/** @brief C 失败后 B 的定向裁决（OWNER 语义同 grad_verdict_t）。 */
+typedef struct grad_arb_fail {
+    grad_vd_kind_t kind;
+    char defect_class[GRAD_DEFECT_CODE_MAX]; /**< reject 时必填合法缺陷码 */
+    int salvageable;                         /**< 1=可在 scope 内定向修补 */
+    char **scope;                            /**< OWNER（顶层与元素） */
+    size_t scope_count;
+    char suggestion[256];
+} grad_arb_fail_t;
+
+/**
+ * @brief 定长字段拷贝：截断补 NUL（纯字符串来源，非 cJSON）。
+ */
+void grad_copy_fld(char *dst, size_t cap, const char *src);
+
+/**
+ * @brief 该失败码是否触发 B 定向仲裁（按 arbiter_on_failure 策略）。
+ *
+ * OFF → 0；E04_ONLY → E-04，或 E-01 且 affected_node 为 guard 节点；
+ * FULL → 任意非 OK。
+ *
+ * @param plan [in] 被验证计划（E-01 守卫分支判定；可为 NULL）
+ * @param affected_node [in] C 报告点名的失败节点 id（可为 NULL）
+ */
+int grad_arb_fail_wanted(uint32_t policy, airy_grad_error_t code,
+                         const airy_task_plan_t *plan, const char *affected_node);
+
+/**
+ * @brief 严格解析失败路径裁决 JSON（契约校验，任一违例整份拒绝）。
+ *
+ * 校验项：verdict ∈ {accept,reject}（必填）；defect_class 出现则须为
+ * 合法缺陷码；salvageable 可选 bool；reject 必须携带合法 defect_class，
+ * scope 可空——空 scope 由协调器判 patch_invalid 并整份重绘；
+ * scope 元素须存在于 plan，去重保序。
+ *
+ * @ownership out->scope: OWNER（grad_arb_fail_free）
+ */
+airy_err_t grad_arb_fail_parse(const char *json, const airy_task_plan_t *plan,
+                               grad_arb_fail_t *out);
+
+/**
+ * @brief 把失败路径裁决派生为 Δk 修补缺陷集（scope 逐节点一条）。
+ *
+ * @ownership out_defects: OWNER（调用方 AIRY_FREE）
+ */
+airy_err_t grad_arb_fail_defects(const grad_arb_fail_t *fail, grad_defect_t **out_defects,
+                                 size_t *out_count);
+
+/**
+ * @brief 回收失败路径裁决（可重复调用；入参可为 NULL）。
+ */
+void grad_arb_fail_free(grad_arb_fail_t *fail);
+
+/* grad_patch.c — C13 失败输入片段序列化（§5.2b.11 七字段来源） */
+
+/** @brief 单节点 schema v1 视图 JSON（深度 1 失败节点自身）。 */
+airy_err_t grad_node_to_json(const airy_task_node_t *node, char **out_json);
+
+/** @brief 节点一阶邻居 JSON：直接前驱 + 直接后继，各限 4。 */
+airy_err_t grad_neighbors_to_json(const airy_task_plan_t *plan, const char *node_id,
+                                  char **out_json);
+
+/** @brief A 侧历史 JSON：[{round,defect_codes[],affected_scope[]}]（≤3 条）。 */
+airy_err_t grad_hist_to_json(const grad_round_hist_t *hist, size_t count, char **out_json);
+
+/** @brief C 报告 JSON（在机制契约字段基础上派生 errors[] 字符串数组）。 */
+airy_err_t grad_c_report_json(const airy_grad_report_t *report, char **out_json);
+
 /* grad_llm_s1_arbiter.c — 模型 B 仲裁域（prompt 六级装配，见 .c 头注释） */
+
+/** @brief 失败路径 B 仲裁（三条消偏规则）。 */
+airy_err_t grad_llm_s1_failure(const grad_arb_fail_in_t *in, char **out_verdict,
+                               void *user_data);
+
+/** @brief 写 A 侧历史（grad_round_note_fn 实现）。 */
+airy_err_t grad_llm_round_note(void *ctx, const grad_round_note_t *note);
 
 #ifdef __cplusplus
 }

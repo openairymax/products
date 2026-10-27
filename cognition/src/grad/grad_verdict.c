@@ -181,8 +181,9 @@ static int vd_scope_has(char **scope, size_t count, const char *id)
     return 0;
 }
 
-/** @brief affected_scope[]：元素必须存在于计划，去重保序。 */
-static airy_err_t vd_scope(const cJSON *root, const airy_task_plan_t *plan, grad_verdict_t *out)
+/** @brief affected_scope[] 解析：元素必须存在于计划，去重保序。 */
+static airy_err_t vd_scope_arr(const cJSON *root, const airy_task_plan_t *plan, char ***out_scope,
+                               size_t *out_count)
 {
     const cJSON *arr = cJSON_GetObjectItemCaseSensitive(root, "affected_scope");
     if (!arr)
@@ -222,9 +223,14 @@ static airy_err_t vd_scope(const cJSON *root, const airy_task_plan_t *plan, grad
         AIRY_FREE(scope);
         return AIRY_SUCCESS;
     }
-    out->scope = scope;
-    out->scope_count = count;
+    *out_scope = scope;
+    *out_count = count;
     return AIRY_SUCCESS;
+}
+
+static airy_err_t vd_scope(const cJSON *root, const airy_task_plan_t *plan, grad_verdict_t *out)
+{
+    return vd_scope_arr(root, plan, &out->scope, &out->scope_count);
 }
 
 /** @brief defects[]：逐条强校验；超出上界截断（裁决本体优先保留）。 */
@@ -326,4 +332,174 @@ airy_err_t grad_verdict_parse(const char *json, const airy_task_plan_t *plan,
     AIRY_LOG_WARN("GRAD-B: verdict contract requires cJSON, deferring to Model C");
     return AIRY_ESERVICE;
 #endif
+}
+
+/** @brief 计划内是否存在指定 id 的 guard 节点（E-01 守卫分支判定）。 */
+static int vd_is_guard(const airy_task_plan_t *plan, const char *node_id)
+{
+    if (!plan || !node_id || !node_id[0])
+        return 0;
+    for (size_t i = 0; i < plan->task_plan_node_count; i++) {
+        const airy_task_node_t *n = plan->task_plan_nodes[i];
+        if (n && n->task_node_invariant_guard && n->task_node_id &&
+            strcmp(n->task_node_id, node_id) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+int grad_arb_fail_wanted(uint32_t policy, airy_grad_error_t code,
+                         const airy_task_plan_t *plan, const char *affected_node)
+{
+    if (code == AIRY_GRAD_OK || policy == AIRY_GRAD_AOF_OFF)
+        return 0;
+    if (policy == AIRY_GRAD_AOF_FULL)
+        return 1;
+    if (code == AIRY_GRAD_E04_GUARD_DRIFT)
+        return 1;
+    /* e04_only 的另一半：E-01 落在 guard 节点上时同样需要语义层介入，
+     * 因为护栏破坏往往不是纯结构问题（§5.2b.11 L854）。 */
+    if (code == AIRY_GRAD_E01_CAUSAL_BREAK)
+        return vd_is_guard(plan, affected_node);
+    return 0;
+}
+
+void grad_arb_fail_free(grad_arb_fail_t *fail)
+{
+    if (!fail)
+        return;
+    if (fail->scope) {
+        for (size_t i = 0; i < fail->scope_count; i++)
+            AIRY_FREE(fail->scope[i]);
+        AIRY_FREE(fail->scope);
+    }
+    AIRY_MEMSET(fail, 0, sizeof(*fail));
+}
+
+/** @brief 定长字段拷贝（截断补 NUL，用于非 cJSON 来源的纯字符串）。 */
+void grad_copy_fld(char *dst, size_t cap, const char *src)
+{
+    if (!dst || cap == 0)
+        return;
+    size_t n = src ? strlen(src) : 0;
+    if (n >= cap)
+        n = cap - 1;
+    if (n)
+        AIRY_MEMCPY(dst, src, n);
+    dst[n] = '\0';
+}
+
+#ifdef AIRY_HAS_CJSON
+
+/** @brief salvageable 字段：缺省 1（可豁免），出现则必须是 bool。 */
+static int vd_salvageable(const cJSON *root, int *out)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "salvageable");
+    if (!v) {
+        *out = 1;
+        return 0;
+    }
+    if (!cJSON_IsBool(v))
+        return -1;
+    *out = cJSON_IsTrue(v) ? 1 : 0;
+    return 0;
+}
+
+/** @brief defect_class 字段：可选；出现则必须是合法缺陷码。 */
+static int vd_defect_class(const cJSON *root, char *dst, size_t cap)
+{
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(root, "defect_class");
+    if (!v)
+        return 0;
+    if (!cJSON_IsString(v) || !v->valuestring || !vd_code_ok(v->valuestring))
+        return -1;
+    return vd_copy(dst, cap, v);
+}
+
+#endif /* AIRY_HAS_CJSON */
+
+airy_err_t grad_arb_fail_parse(const char *json, const airy_task_plan_t *plan,
+                               grad_arb_fail_t *out)
+{
+    if (!json || !plan || !out)
+        return AIRY_EINVAL;
+    AIRY_MEMSET(out, 0, sizeof(*out));
+    if (!json[0] || plan->task_plan_node_count == 0)
+        return AIRY_EINVAL;
+
+#ifdef AIRY_HAS_CJSON
+    cJSON *root = cJSON_Parse(json);
+    if (!root)
+        return AIRY_EINVAL;
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return AIRY_EINVAL;
+    }
+
+    grad_arb_fail_t f;
+    AIRY_MEMSET(&f, 0, sizeof(f));
+    airy_err_t err = AIRY_EINVAL;
+    if (vd_kind(root, &f.kind) != 0 || vd_defect_class(root, f.defect_class,
+                                                      sizeof(f.defect_class)) != 0 ||
+        vd_salvageable(root, &f.salvageable) != 0) {
+        goto out;
+    }
+    if (cJSON_IsString(cJSON_GetObjectItemCaseSensitive(root, "suggestion")) &&
+        vd_copy(f.suggestion, sizeof(f.suggestion),
+                cJSON_GetObjectItemCaseSensitive(root, "suggestion")) != 0) {
+        goto out;
+    }
+    err = vd_scope_arr(root, plan, &f.scope, &f.scope_count);
+    if (err != AIRY_SUCCESS)
+        goto out;
+    /* reject 必须带缺陷类：否则无法映射到 E-01..E-05/SEM，裁决不可用。
+     * scope 为空不在此判违例——"能驳回但定位不到节点"是 P0-7 负向用例③
+     * 的 patch_invalid 路径，由协调器回退全量重绘并计数。 */
+    if (f.kind == GRAD_VD_REJECT && !f.defect_class[0]) {
+        err = AIRY_EINVAL;
+        goto out;
+    }
+    err = AIRY_SUCCESS;
+
+out:
+    cJSON_Delete(root);
+    if (err != AIRY_SUCCESS) {
+        grad_arb_fail_free(&f);
+        return err;
+    }
+    *out = f;
+    return AIRY_SUCCESS;
+#else
+    AIRY_LOG_WARN("GRAD-B: failure verdict contract requires cJSON, deferring to Model C");
+    return AIRY_ESERVICE;
+#endif
+}
+
+airy_err_t grad_arb_fail_defects(const grad_arb_fail_t *fail, grad_defect_t **out_defects,
+                                 size_t *out_count)
+{
+    if (!fail || !out_defects || !out_count)
+        return AIRY_EINVAL;
+    *out_defects = NULL;
+    *out_count = 0;
+    if (fail->kind != GRAD_VD_REJECT || fail->scope_count == 0 || !fail->defect_class[0])
+        return AIRY_SUCCESS;
+
+    size_t n = fail->scope_count;
+    if (n > GRAD_ARBITER_MAX_DEFECTS)
+        n = GRAD_ARBITER_MAX_DEFECTS;
+    grad_defect_t *defects = (grad_defect_t *)AIRY_CALLOC(n, sizeof(grad_defect_t));
+    if (!defects)
+        return AIRY_ENOMEM;
+    for (size_t i = 0; i < n; i++) {
+        if (!fail->scope[i])
+            continue;
+        grad_copy_fld(defects[i].node_id, sizeof(defects[i].node_id), fail->scope[i]);
+        grad_copy_fld(defects[i].code, sizeof(defects[i].code), fail->defect_class);
+        grad_copy_fld(defects[i].evidence, sizeof(defects[i].evidence), "arbiter-failure");
+        grad_copy_fld(defects[i].suggestion, sizeof(defects[i].suggestion), fail->suggestion);
+    }
+    *out_defects = defects;
+    *out_count = n;
+    return AIRY_SUCCESS;
 }

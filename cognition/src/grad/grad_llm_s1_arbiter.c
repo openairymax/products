@@ -468,3 +468,187 @@ airy_err_t grad_llm_s1_arbiter(const airy_gccp_goal_t *goal, const airy_grad_rep
     *out_verdict = verdict;
     return AIRY_SUCCESS;
 }
+
+/* ── C 失败路径定向仲裁（C13 §5.2b.11） ─────────────────────────────── */
+
+static const char GRAD_S1_FAILURE_SYSTEM_PROMPT[] =
+    "You are the contextual arbiter (Model B) in a goal-anchored planning system. "
+    "Model C (deterministic verifier) has REJECTED a task plan DAG. You do not "
+    "overturn that rejection: your only job is to say how the plan must be "
+    "repaired.\n"
+    "Reply with ONLY one JSON object (no markdown fences, no prose):\n"
+    "{\"verdict\":\"accept|reject\","
+    "\"defect_class\":\"E-01|E-02|E-03|E-04|E-05|SEM\","
+    "\"salvageable\":true|false,\"affected_scope\":[\"<plan node id>\"],"
+    "\"suggestion\":\"...\"}\n"
+    "Rules:\n"
+    "- verdict=accept: you agree the repair is purely mechanical, so Model A "
+    "applies Model C's template patch unchanged.\n"
+    "- verdict=reject requires a non-empty affected_scope whose ids are copied "
+    "verbatim from the failed node or its listed neighbours. Never reject with "
+    "an empty affected_scope.\n"
+    "- defect_class: E-01 causality break, E-02 deadlock, E-03 resource "
+    "overflow, E-04 purpose drift, E-05 insufficient verification metadata, "
+    "SEM semantic mismatch with the goal.\n"
+    "- salvageable=true: patching affected_scope is enough. salvageable=false: "
+    "the plan must be redrawn from scratch.\n"
+    "- suggestion is mandatory for verdict=reject: one sentence naming the "
+    "concrete edit (which node, which field).\n"
+    "- Do not repeat a defect already listed in the round history unless you "
+    "explain why this plan cannot avoid it.";
+
+#define ARB_FAIL_FOOTER "\n\nRender your verdict now as the single JSON object defined above."
+#define ARB_FAIL_SCOPE_MAX 4
+#define ARB_FAIL_SCOPE_CHARS 96
+
+/**
+ * @brief 失败路径 prompt 装配：核心三段（goal/C 报告/失败节点）不可裁。
+ *
+ * 消偏三规则要求 ①②③ 恒在；相邻节点与轮次历史属可裁证据，整体超
+ * GRAD_ARBITER_PROMPT_MAX_CHARS 时一并丢弃并显式标注（提示 B 不得据此
+ * 假设邻域为空）。token_budget 仅由协调器用于记账，硬上限仍是字符数。
+ */
+static char *arb_fail_prompt(const grad_arb_fail_in_t *in, int with_ext)
+{
+    abuf_t b;
+    if (ab_init(&b) != 0)
+        return NULL;
+
+    ab_add(&b, "Model C rejected this plan. Decide how to repair it.\n\n"
+               "Confirmed goal (G):\n");
+    ab_add(&b, (in->goal_json && in->goal_json[0]) ? in->goal_json : "null");
+    ab_put(&b, "\n\nVerification report (Model C, round %u):\n", (unsigned)(in->round + 1));
+    ab_add(&b, (in->c_report_json && in->c_report_json[0]) ? in->c_report_json : "{}");
+    ab_add(&b, "\n\nFailed node (full text, depth 1):\n");
+    ab_add(&b, (in->failed_node_json && in->failed_node_json[0]) ? in->failed_node_json : "{}");
+
+    if (with_ext) {
+        ab_add(&b, "\n\nDirect neighbours (predecessors then successors, max 4 each):\n");
+        ab_add(&b, (in->neighbors_json && in->neighbors_json[0]) ? in->neighbors_json : "{}");
+        ab_add(&b, "\n\nPrevious rounds (most recent last, max 3):\n");
+        ab_add(&b, (in->round_history_json && in->round_history_json[0])
+                       ? in->round_history_json
+                       : "[]");
+        ab_add(&b, "\nRejected rounds above were judged by Model C, not by you. "
+                   "Do NOT reproduce the same defect. If the same defect recurs, "
+                   "state why the plan cannot avoid it.");
+    } else {
+        ab_add(&b, "\n\n[neighbours and round history omitted: prompt budget]");
+    }
+    ab_add(&b, ARB_FAIL_FOOTER);
+
+    if (b.bad) {
+        ab_free(&b);
+        return NULL;
+    }
+    return b.p;
+}
+
+airy_err_t grad_llm_s1_failure(const grad_arb_fail_in_t *in, char **out_verdict,
+                               void *user_data)
+{
+    if (!out_verdict)
+        return AIRY_EINVAL;
+    *out_verdict = NULL;
+    if (!in)
+        return AIRY_EINVAL;
+
+    grad_llm_ctx_t *ctx = (grad_llm_ctx_t *)user_data;
+    if (!ctx)
+        return AIRY_EINVAL;
+
+    /* 失败轮的 C 报告同样落盘：否则决策链在 reject 分支上缺失证据 */
+    if (ctx->workspace_root && ctx->plan_id && in->c_report_json) {
+        char *dir = grad_ws_dir(ctx);
+        if (dir) {
+            char fname[64];
+            snprintf(fname, sizeof(fname), "round_%u.json", (unsigned)(in->round + 1));
+            grad_ws_write_file(dir, "c_verify", fname, in->c_report_json,
+                               strlen(in->c_report_json));
+            AIRY_FREE(dir);
+        }
+    }
+
+    char *prompt = arb_fail_prompt(in, 1);
+    if (prompt && strlen(prompt) > GRAD_ARBITER_PROMPT_MAX_CHARS) {
+        AIRY_FREE(prompt);
+        prompt = arb_fail_prompt(in, 0);
+        if (prompt)
+            AIRY_LOG_WARN("GRAD-B: failure prompt over budget, neighbours/history dropped");
+    }
+    if (!prompt) {
+        AIRY_LOG_WARN("GRAD-B: failure prompt assembly failed (OOM), deferring to Model C");
+        return AIRY_SUCCESS;
+    }
+
+    char *verdict = NULL;
+    size_t verdict_len = 0;
+    airy_err_t err = grad_llm_call(ctx, GRAD_S1_FAILURE_SYSTEM_PROMPT, prompt,
+                                   ctx->s1_verify_model, AIRY_GRAD_ROLE_B, &verdict,
+                                   &verdict_len);
+    AIRY_FREE(prompt);
+
+    if (err != AIRY_SUCCESS || !verdict) {
+        AIRY_LOG_WARN("GRAD-B: failure arbitration LLM unavailable (err=%d), C patch kept",
+                      (int)err);
+        return AIRY_SUCCESS;
+    }
+
+    if (ctx->workspace_root && ctx->plan_id) {
+        grad_llm_trace_append(ctx, "b_arbiter_fail", verdict);
+        char *dir = grad_ws_dir(ctx);
+        if (dir) {
+            char fname[64];
+            snprintf(fname, sizeof(fname), "round_%u_fail.json", (unsigned)(in->round + 1));
+            grad_ws_write_file(dir, "b_arbiter", fname, verdict, verdict_len);
+            AIRY_FREE(dir);
+        }
+    }
+
+    *out_verdict = verdict;
+    return AIRY_SUCCESS;
+}
+
+airy_err_t grad_llm_round_note(void *ctx, const grad_round_note_t *note)
+{
+    grad_llm_ctx_t *c = (grad_llm_ctx_t *)ctx;
+    if (!c || !note)
+        return AIRY_EINVAL;
+
+    /* affected_scope 紧凑呈现：最多 4 个 id，其余以 +N 归一（行长有界） */
+    char scope[ARB_FAIL_SCOPE_CHARS];
+    scope[0] = '\0';
+    size_t used = 0;
+    size_t shown = 0;
+    for (size_t i = 0; i < note->scope_count && shown < ARB_FAIL_SCOPE_MAX; i++) {
+        const char *id = (note->scope && note->scope[i]) ? note->scope[i] : "";
+        int n = snprintf(scope + used, sizeof(scope) - used, "%s%s", shown ? "," : "", id);
+        if (n < 0 || (size_t)n >= sizeof(scope) - used)
+            break;
+        used += (size_t)n;
+        shown++;
+    }
+    if (note->scope_count > shown && used + 4 < sizeof(scope))
+        snprintf(scope + used, sizeof(scope) - used, ",+%zu", note->scope_count - shown);
+
+    char line[GRAD_ARBITER_HIST_LINE];
+    int n = snprintf(line, sizeof(line),
+                     "round %u: rejected by C [%s]; affected_scope=[%s]; arbiter=%s",
+                     (unsigned)(note->round + 1),
+                     (note->codes && note->codes[0]) ? note->codes : "-", scope,
+                     (note->arbiter && note->arbiter[0]) ? note->arbiter : "accept");
+    if (n < 0)
+        return AIRY_EUNKNOWN;
+    if ((size_t)n >= sizeof(line))
+        line[sizeof(line) - 1] = '\0';
+
+    if (c->a_hist_count < GRAD_ARBITER_MAX_HISTORY) {
+        AIRY_MEMCPY(c->a_hist[c->a_hist_count], line, strlen(line) + 1);
+        c->a_hist_count++;
+        return AIRY_SUCCESS;
+    }
+    for (uint32_t i = 1; i < GRAD_ARBITER_MAX_HISTORY; i++)
+        AIRY_MEMCPY(c->a_hist[i - 1], c->a_hist[i], GRAD_ARBITER_HIST_LINE);
+    AIRY_MEMCPY(c->a_hist[GRAD_ARBITER_MAX_HISTORY - 1], line, strlen(line) + 1);
+    return AIRY_SUCCESS;
+}

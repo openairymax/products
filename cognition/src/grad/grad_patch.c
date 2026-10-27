@@ -573,6 +573,283 @@ airy_err_t grad_plan_merge(const airy_task_plan_t *plan, const airy_task_plan_t 
 
 /* ---------------- schema v1 视图序列化 ---------------- */
 
+/** @brief 单节点 schema v1 片段（计划视图与失败节点快照共用）。 */
+static void pn_emit(pbuf_t *b, const airy_task_node_t *tn)
+{
+    pbuf_puts(b, "{\"id\":\"");
+    pbuf_puts_esc(b, tn->task_node_id ? tn->task_node_id : "");
+    pbuf_puts(b, "\",\"goal\":\"");
+    pbuf_puts_esc(b, tn->task_node_goal ? tn->task_node_goal : "");
+    pbuf_puts(b, "\",\"role\":\"");
+    pbuf_puts_esc(b, tn->task_node_agent_role ? tn->task_node_agent_role : "act");
+    pbuf_puts(b, "\",\"depends\":[");
+    for (size_t k = 0; k < tn->task_node_depends_count; k++) {
+        if (k)
+            pbuf_putc(b, ',');
+        pbuf_putc(b, '"');
+        pbuf_puts_esc(b, tn->task_node_depends_on[k]);
+        pbuf_putc(b, '"');
+    }
+    pbuf_puts(b, "],\"inputs\":[");
+    for (size_t k = 0; k < tn->task_node_inputs_count; k++) {
+        if (k)
+            pbuf_putc(b, ',');
+        pbuf_putc(b, '"');
+        pbuf_puts_esc(b, tn->task_node_inputs[k]);
+        pbuf_putc(b, '"');
+    }
+    pbuf_puts(b, "],\"outputs\":[");
+    for (size_t k = 0; k < tn->task_node_outputs_count; k++) {
+        if (k)
+            pbuf_putc(b, ',');
+        pbuf_putc(b, '"');
+        pbuf_puts_esc(b, tn->task_node_outputs[k]);
+        pbuf_putc(b, '"');
+    }
+    pbuf_putc(b, ']');
+    if (tn->task_node_cost_time_ms > 0) {
+        pbuf_puts(b, ",\"cost_time_ms\":");
+        pbuf_put_i64(b, tn->task_node_cost_time_ms);
+    }
+    if (tn->task_node_cost_mem_mb > 0) {
+        pbuf_puts(b, ",\"cost_mem_mb\":");
+        pbuf_put_i64(b, tn->task_node_cost_mem_mb);
+    }
+    pbuf_puts(b, ",\"invariant_guard\":");
+    pbuf_puts(b, tn->task_node_invariant_guard ? "true" : "false");
+    /* 0 视为未设置（parse 侧同义），序列化为缺省值保 schema 值域 */
+    pbuf_puts(b, ",\"timeout_ms\":");
+    pbuf_put_u32(b, tn->task_node_timeout_ms > 0 ? tn->task_node_timeout_ms
+                                                 : GRAD_TIMEOUT_DEFAULT_MS);
+    pbuf_puts(b, ",\"priority\":");
+    pbuf_put_u32(b, tn->task_node_priority);
+    pbuf_putc(b, '}');
+}
+
+static size_t pn_cap(const airy_task_node_t *tn)
+{
+    size_t cap = 224;
+    cap += 6 * (s_len(tn->task_node_id) + s_len(tn->task_node_goal) +
+                s_len(tn->task_node_agent_role));
+    cap += strarr_cap(tn->task_node_depends_on, tn->task_node_depends_count);
+    cap += strarr_cap(tn->task_node_inputs, tn->task_node_inputs_count);
+    cap += strarr_cap(tn->task_node_outputs, tn->task_node_outputs_count);
+    return cap;
+}
+
+airy_err_t grad_node_to_json(const airy_task_node_t *node, char **out_json)
+{
+    if (!node || !out_json)
+        return AIRY_EINVAL;
+    *out_json = NULL;
+    pbuf_t b;
+    pbuf_init(&b, pn_cap(node) + 1);
+    if (!b.buf)
+        return AIRY_ENOMEM;
+    pn_emit(&b, node);
+    if (b.over) {
+        AIRY_FREE(b.buf);
+        return AIRY_EUNKNOWN;
+    }
+    *out_json = b.buf;
+    return AIRY_SUCCESS;
+}
+
+airy_err_t grad_neighbors_to_json(const airy_task_plan_t *plan, const char *node_id,
+                                  char **out_json)
+{
+    if (!plan || !node_id || !out_json)
+        return AIRY_EINVAL;
+    *out_json = NULL;
+    size_t me = node_index(plan, node_id);
+    if (me >= plan->task_plan_node_count)
+        return AIRY_EINVAL;
+    const airy_task_node_t *tn = plan->task_plan_nodes[me];
+
+    size_t cap = 64;
+    for (size_t i = 0; i < tn->task_node_depends_count; i++)
+        cap += 8 + 6 * s_len(tn->task_node_depends_on[i]);
+    for (size_t i = 0; i < plan->task_plan_node_count; i++) {
+        const airy_task_node_t *n = plan->task_plan_nodes[i];
+        if (n)
+            cap += 8 + 6 * s_len(n->task_node_id);
+    }
+    pbuf_t b;
+    pbuf_init(&b, cap);
+    if (!b.buf)
+        return AIRY_ENOMEM;
+
+    pbuf_puts(&b, "{\"predecessors\":[");
+    size_t emitted = 0;
+    for (size_t i = 0; i < tn->task_node_depends_count && emitted < 4; i++) {
+        if (emitted)
+            pbuf_putc(&b, ',');
+        pbuf_putc(&b, '"');
+        pbuf_puts_esc(&b, tn->task_node_depends_on[i]);
+        pbuf_putc(&b, '"');
+        emitted++;
+    }
+    pbuf_puts(&b, "],\"successors\":[");
+    emitted = 0;
+    for (size_t i = 0; i < plan->task_plan_node_count && emitted < 4; i++) {
+        const airy_task_node_t *n = plan->task_plan_nodes[i];
+        if (!n || i == me)
+            continue;
+        int depends = 0;
+        for (size_t k = 0; k < n->task_node_depends_count; k++) {
+            if (n->task_node_depends_on[k] && strcmp(n->task_node_depends_on[k], node_id) == 0) {
+                depends = 1;
+                break;
+            }
+        }
+        if (!depends)
+            continue;
+        if (emitted)
+            pbuf_putc(&b, ',');
+        pbuf_putc(&b, '"');
+        pbuf_puts_esc(&b, n->task_node_id ? n->task_node_id : "");
+        pbuf_putc(&b, '"');
+        emitted++;
+    }
+    pbuf_puts(&b, "]}");
+
+    if (b.over) {
+        AIRY_FREE(b.buf);
+        return AIRY_EUNKNOWN;
+    }
+    *out_json = b.buf;
+    return AIRY_SUCCESS;
+}
+
+airy_err_t grad_hist_to_json(const grad_round_hist_t *hist, size_t count, char **out_json)
+{
+    if (!hist || !out_json)
+        return AIRY_EINVAL;
+    *out_json = NULL;
+    if (count > GRAD_ARBITER_MAX_HISTORY)
+        count = GRAD_ARBITER_MAX_HISTORY;
+
+    size_t cap = 16;
+    for (size_t i = 0; i < count; i++)
+        cap += 64 + s_len(hist[i].codes) + 16 * hist[i].scope_count;
+    pbuf_t b;
+    pbuf_init(&b, cap);
+    if (!b.buf)
+        return AIRY_ENOMEM;
+
+    pbuf_putc(&b, '[');
+    for (size_t i = 0; i < count; i++) {
+        if (i)
+            pbuf_putc(&b, ',');
+        pbuf_puts(&b, "{\"round\":");
+        pbuf_put_u32(&b, hist[i].round);
+        pbuf_puts(&b, ",\"defect_codes\":[");
+        /* codes 为逗号分隔串，逐段拆为字符串数组 */
+        const char *p = hist[i].codes;
+        int first = 1;
+        while (p && *p) {
+            const char *comma = strchr(p, ',');
+            size_t n = comma ? (size_t)(comma - p) : strlen(p);
+            if (n) {
+                if (!first)
+                    pbuf_putc(&b, ',');
+                first = 0;
+                pbuf_putc(&b, '"');
+                char seg[GRAD_DEFECT_CODE_MAX];
+                size_t k = n < sizeof(seg) - 1 ? n : sizeof(seg) - 1;
+                AIRY_MEMCPY(seg, p, k);
+                seg[k] = '\0';
+                pbuf_puts_esc(&b, seg);
+                pbuf_putc(&b, '"');
+            }
+            p = comma ? comma + 1 : NULL;
+        }
+        pbuf_puts(&b, "],\"affected_scope\":[");
+        for (size_t k = 0; k < hist[i].scope_count; k++) {
+            if (k)
+                pbuf_putc(&b, ',');
+            pbuf_putc(&b, '"');
+            pbuf_puts_esc(&b, hist[i].scope[k] ? hist[i].scope[k] : "");
+            pbuf_putc(&b, '"');
+        }
+        pbuf_puts(&b, "]}");
+    }
+    pbuf_putc(&b, ']');
+
+    if (b.over) {
+        AIRY_FREE(b.buf);
+        return AIRY_EUNKNOWN;
+    }
+    *out_json = b.buf;
+    return AIRY_SUCCESS;
+}
+
+airy_err_t grad_c_report_json(const airy_grad_report_t *report, char **out_json)
+{
+    if (!report || !out_json)
+        return AIRY_EINVAL;
+    *out_json = NULL;
+
+    size_t cap = 1024;
+    cap += 6 * (s_len(report->affected_node) + s_len(report->missing_artifact) +
+                s_len(report->cycle_path));
+    pbuf_t b;
+    pbuf_init(&b, cap);
+    if (!b.buf)
+        return AIRY_ENOMEM;
+
+    pbuf_puts(&b, "{\"error\":");
+    pbuf_put_u32(&b, (uint32_t)report->error);
+    pbuf_puts(&b, ",\"error_desc\":\"");
+    pbuf_puts_esc(&b, airy_grad_error_str(report->error));
+    pbuf_puts(&b, "\",\"affected_node\":\"");
+    pbuf_puts_esc(&b, report->affected_node);
+    pbuf_puts(&b, "\",\"missing_artifact\":\"");
+    pbuf_puts_esc(&b, report->missing_artifact);
+    pbuf_puts(&b, "\",\"cycle_path\":\"");
+    pbuf_puts_esc(&b, report->cycle_path);
+    pbuf_puts(&b, "\",\"cost_sum_ms\":");
+    pbuf_put_i64(&b, report->cost_sum_ms);
+    pbuf_puts(&b, ",\"cost_sum_mb\":");
+    pbuf_put_i64(&b, report->cost_sum_mb);
+    pbuf_puts(&b, ",\"checked_nodes\":");
+    pbuf_put_u32(&b, report->checked_nodes);
+    pbuf_puts(&b, ",\"skipped_nodes\":");
+    pbuf_put_u32(&b, report->skipped_nodes);
+    pbuf_puts(&b, ",\"invariant_guards\":");
+    pbuf_put_u32(&b, report->invariant_guards);
+    pbuf_puts(&b, ",\"errors_bitmap\":");
+    pbuf_put_u32(&b, report->errors);
+    pbuf_puts(&b, ",\"causal_checked\":");
+    pbuf_put_u32(&b, report->causal_checked);
+    pbuf_puts(&b, ",\"cost_checked\":");
+    pbuf_put_u32(&b, report->cost_checked);
+    pbuf_puts(&b, ",\"metadata_ok\":");
+    pbuf_put_u32(&b, report->metadata_ok);
+    pbuf_puts(&b, ",\"guard_state\":");
+    pbuf_put_u32(&b, (uint32_t)report->guard_state);
+    pbuf_puts(&b, ",\"errors\":[");
+    int first = 1;
+    for (int e = 1; e <= (int)AIRY_GRAD_E04_GUARD_DRIFT; e++) {
+        if (!(report->errors & AIRY_GRAD_ERR_BIT(e)))
+            continue;
+        if (!first)
+            pbuf_putc(&b, ',');
+        first = 0;
+        pbuf_putc(&b, '"');
+        pbuf_puts_esc(&b, airy_grad_error_str((airy_grad_error_t)e));
+        pbuf_putc(&b, '"');
+    }
+    pbuf_puts(&b, "]}");
+
+    if (b.over) {
+        AIRY_FREE(b.buf);
+        return AIRY_EUNKNOWN;
+    }
+    *out_json = b.buf;
+    return AIRY_SUCCESS;
+}
+
 airy_err_t grad_plan_to_json(const airy_task_plan_t *plan, char **out_json)
 {
     if (!plan || !out_json)
@@ -585,12 +862,7 @@ airy_err_t grad_plan_to_json(const airy_task_plan_t *plan, char **out_json)
         const airy_task_node_t *tn = plan->task_plan_nodes[i];
         if (!tn)
             continue;
-        cap += 224;
-        cap += 6 * (s_len(tn->task_node_id) + s_len(tn->task_node_goal) +
-                    s_len(tn->task_node_agent_role));
-        cap += strarr_cap(tn->task_node_depends_on, tn->task_node_depends_count);
-        cap += strarr_cap(tn->task_node_inputs, tn->task_node_inputs_count);
-        cap += strarr_cap(tn->task_node_outputs, tn->task_node_outputs_count);
+        cap += pn_cap(tn);
     }
 
     pbuf_t b;
@@ -609,54 +881,7 @@ airy_err_t grad_plan_to_json(const airy_task_plan_t *plan, char **out_json)
         if (!first)
             pbuf_putc(&b, ',');
         first = 0;
-        pbuf_puts(&b, "{\"id\":\"");
-        pbuf_puts_esc(&b, tn->task_node_id ? tn->task_node_id : "");
-        pbuf_puts(&b, "\",\"goal\":\"");
-        pbuf_puts_esc(&b, tn->task_node_goal ? tn->task_node_goal : "");
-        pbuf_puts(&b, "\",\"role\":\"");
-        pbuf_puts_esc(&b, tn->task_node_agent_role ? tn->task_node_agent_role : "act");
-        pbuf_puts(&b, "\",\"depends\":[");
-        for (size_t k = 0; k < tn->task_node_depends_count; k++) {
-            if (k)
-                pbuf_putc(&b, ',');
-            pbuf_putc(&b, '"');
-            pbuf_puts_esc(&b, tn->task_node_depends_on[k]);
-            pbuf_putc(&b, '"');
-        }
-        pbuf_puts(&b, "],\"inputs\":[");
-        for (size_t k = 0; k < tn->task_node_inputs_count; k++) {
-            if (k)
-                pbuf_putc(&b, ',');
-            pbuf_putc(&b, '"');
-            pbuf_puts_esc(&b, tn->task_node_inputs[k]);
-            pbuf_putc(&b, '"');
-        }
-        pbuf_puts(&b, "],\"outputs\":[");
-        for (size_t k = 0; k < tn->task_node_outputs_count; k++) {
-            if (k)
-                pbuf_putc(&b, ',');
-            pbuf_putc(&b, '"');
-            pbuf_puts_esc(&b, tn->task_node_outputs[k]);
-            pbuf_putc(&b, '"');
-        }
-        pbuf_putc(&b, ']');
-        if (tn->task_node_cost_time_ms > 0) {
-            pbuf_puts(&b, ",\"cost_time_ms\":");
-            pbuf_put_i64(&b, tn->task_node_cost_time_ms);
-        }
-        if (tn->task_node_cost_mem_mb > 0) {
-            pbuf_puts(&b, ",\"cost_mem_mb\":");
-            pbuf_put_i64(&b, tn->task_node_cost_mem_mb);
-        }
-        pbuf_puts(&b, ",\"invariant_guard\":");
-        pbuf_puts(&b, tn->task_node_invariant_guard ? "true" : "false");
-        /* 0 视为未设置（parse 侧同义），序列化为缺省值保 schema 值域 */
-        pbuf_puts(&b, ",\"timeout_ms\":");
-        pbuf_put_u32(&b, tn->task_node_timeout_ms > 0 ? tn->task_node_timeout_ms
-                                                      : GRAD_TIMEOUT_DEFAULT_MS);
-        pbuf_puts(&b, ",\"priority\":");
-        pbuf_put_u32(&b, tn->task_node_priority);
-        pbuf_putc(&b, '}');
+        pn_emit(&b, tn);
     }
     pbuf_puts(&b, "],\"entry\":[");
     first = 1;

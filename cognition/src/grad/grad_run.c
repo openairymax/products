@@ -58,6 +58,10 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     grad_cfg.s1_arbiter = grad_llm_s1_arbiter;
     grad_cfg.s2_user_data = &grad_ctx;
     grad_cfg.s1_user_data = &grad_ctx;
+    /* C13：C 报错后的 B 定向仲裁（默认 e04_only）+ A 侧轮次记忆写入 */
+    grad_cfg.s1_failure = grad_llm_s1_failure;
+    grad_cfg.round_note_cb = grad_llm_round_note;
+    grad_cfg.round_note_user_data = &grad_ctx;
     /* 2.3.14 GRAD 决策链可见性：阶段进度回调经 launch 透传。 */
     grad_cfg.progress_cb = launch->progress_cb;
     grad_cfg.progress_user_data = launch->progress_user_data;
