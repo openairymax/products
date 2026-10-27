@@ -7,8 +7,11 @@
  * 五态机：C0 提案 → C1 影子 → C2 本地灰度（10%→50%→100%，每级 ≥2h）
  * → C3 采纳（写 local overlay manifest，记 base SHA-256）→ C4 回滚
  * （恢复上一 manifest，只回 overlay 不碰 base）。爆炸半径硬约束：
- * 一次演化 ≤1 模块 / ≤3 文件 / ≤200 行；G30 准入：新增函数 ≤150 行、
- * 修改后 ≤200 行。kill switch 三通道（环境变量 / 文件哨兵 / CLI），
+ * 一次演化 ≤1 模块 / ≤3 文件 / ≤200 行（无 diff 来源可申报
+ * unmeasured）；G30 准入：新增函数 ≤150 行、修改后 ≤200 行，
+ * -1 表示输入非法（空度量，宿主报错并降级为无灰度），-2 表示
+ * 不满足灰度条件（超限，暂不开启）。kill switch 三通道
+ * （环境变量 / 文件哨兵 / CLI），
  * 命中即停止一切自演化写入。base 变化 → manifest 标记待重放，
  * 禁止静默合并。
  *
@@ -58,12 +61,15 @@ typedef enum {
 
 typedef struct canary_s canary_t;
 
-/* 爆炸半径申报（C0 提案） */
+/* 爆炸半径申报（C0 提案）。lines/fn_new/fn_mod 须为实测值，
+ * 无 diff 来源时置 0（账本标注 unmeasured，禁止代理量冒充） */
 typedef struct {
     const char *module;
     const char *const *files;
     size_t nfiles;
     size_t lines;
+    size_t fn_new;
+    size_t fn_mod;
 } canary_blast_t;
 
 /* 门禁指标观测（K1-K6 定量面）。ok_pm/perf_ppm 取 0 表示无观测
@@ -86,7 +92,8 @@ void canary_free(canary_t *c);
 /* C0 提案：校验爆炸半径硬约束（≤1 模块由实例构造保证） */
 int canary_propose(canary_t *c, const canary_blast_t *b);
 
-/* G30 准入：演化补丁函数行数静态校验（W6 canary 准入前执行） */
+/* G30 准入：演化补丁函数行数静态校验（W6 canary 准入前执行）。
+ * 返回 -1 输入非法（空度量）；-2 不满足灰度条件（超限）；0 准入 */
 int canary_admit(size_t new_fn, size_t mod_fn);
 
 /* 门禁判定：K1-K6 全绿返回 0，指标未知返回 CANARY_K_UNKNOWN，
