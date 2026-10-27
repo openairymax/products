@@ -29,7 +29,10 @@ static const char GRAD_S2_SYSTEM_PROMPT[] =
     "role must be one of plan, retrieve, reason, act, verify; "
     "outputs, inputs, cost_time_ms and cost_mem_mb may be omitted "
     "(they are inferred automatically, but explicit values are preferred); "
-    "nodes that must not break the goal's core invariant set invariant_guard=true.";
+    "nodes that must not break the goal's core invariant set invariant_guard=true.\n"
+    "Structure first (T3): keep every text field terse and verifiable — "
+    "concrete metadata, dependencies and acceptance-worthy outputs carry the "
+    "plan; do not write long prose in goal/outputs fields.";
 
 /**
  * @brief Serialize goal G into compact JSON text (for prompt injection and goal.json persistence).
@@ -108,8 +111,22 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
             if (off >= cap)
                 off = cap - 1;
         }
-        snprintf(prompt + off, cap - off,
-                 "Generate the FULL corrected plan JSON (all nodes, consistent with the patch).");
+        if (ctx->incremental_patch) {
+            /* T3（0.1.20）：Δ 渲染契约——只回受影响节点子集（含新增生产
+             * 者），未变节点禁止重复。输出 tokens 较全量重绘下降 ≥50%
+             * 的 G61 主手段；服务端结构等价性校验由协调器 merge 承接
+             * （越权/frozen 篡改回滚并强制整份重绘）。 */
+            snprintf(prompt + off, cap - off,
+                     "Output ONLY a patch plan JSON: {\"nodes\":[...],\"entry\":[...]} "
+                     "containing just the nodes listed in affected_scope (plus any NEW "
+                     "producer nodes they depend on), restating each affected node's "
+                     "corrected definition with all required fields (id, goal, role, "
+                     "depends). Do NOT repeat unchanged nodes. Keep node ids stable.");
+        } else {
+            snprintf(prompt + off, cap - off,
+                     "Generate the FULL corrected plan JSON (all nodes, consistent "
+                     "with the patch).");
+        }
     } else {
         snprintf(prompt, cap,
                  "Confirmed goal (G): %s\n\n"

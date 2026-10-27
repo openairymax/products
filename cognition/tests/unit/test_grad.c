@@ -218,6 +218,8 @@ int main(void)
     RUN_TEST(test_arbiter_malformed_verdicts);
     RUN_TEST(test_grad_role_usage);
     RUN_TEST(test_grad_c11_contract);
+    RUN_TEST(test_grad_t3_patch_prompt);
+    RUN_TEST(test_grad_t4_stream);
     RUN_TEST(test_schema_valid_full);
     RUN_TEST(test_schema_optional_metadata);
     RUN_TEST(test_schema_plan_id);
