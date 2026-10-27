@@ -487,10 +487,13 @@ if(BUILD_TESTS)
         tests/unit/test_grad_schema.c
         tests/unit/test_grad_metadata.c
         tests/unit/test_grad_patch.c
+        tests/unit/test_grad_c13.c
         ${COG_GRAD_TEST_SRCS})
     target_compile_definitions(test_grad_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
     if(_cog_cjson_libs)
         target_compile_definitions(test_grad_strategy PRIVATE AIRY_HAS_CJSON=1)
+        target_compile_definitions(test_grad_strategy PRIVATE
+            GRAD_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/grad/golden")
     endif()
     target_include_directories(test_grad_strategy PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include

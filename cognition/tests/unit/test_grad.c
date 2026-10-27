@@ -235,6 +235,13 @@ int main(void)
     RUN_TEST(test_patch_build_incremental);
     RUN_TEST(test_patch_full);
     RUN_TEST(test_plan_merge_scope);
+    RUN_TEST(test_c13_e04_calls);
+    RUN_TEST(test_c13_fallback);
+    RUN_TEST(test_c13_patch_invalid);
+    RUN_TEST(test_c13_policy_off);
+    RUN_TEST(test_c13_budget_skip);
+    RUN_TEST(test_c13_j16_stop);
+    RUN_TEST(test_c13_golden);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
            tests_failed);
