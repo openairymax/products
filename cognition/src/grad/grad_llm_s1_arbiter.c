@@ -478,8 +478,11 @@ airy_err_t grad_llm_s1_arbiter(const airy_gccp_goal_t *goal, const airy_grad_rep
             AIRY_LOG_WARN("GRAD-B: prompt over C12 budget, deferring to Model C");
             return AIRY_ERANGE;
         }
+        /* C7 R4：装配 OOM 显式上报（此前返回 SUCCESS 静默采纳 C 判定，
+         * B 故障在事件流不可归因）。协调器计 arbiter_unavailable 并发
+         * grad_arbiter_unavailable 事件，C 判定语义不变。 */
         AIRY_LOG_WARN("GRAD-B: prompt assembly failed (OOM), deferring to Model C");
-        return AIRY_SUCCESS;
+        return AIRY_ENOMEM;
     }
 
     char *verdict = NULL;
@@ -490,9 +493,11 @@ airy_err_t grad_llm_s1_arbiter(const airy_gccp_goal_t *goal, const airy_grad_rep
     AIRY_FREE(prompt);
 
     if (err != AIRY_SUCCESS || !verdict) {
+        /* C7 R4：服务故障/空裁决显式上报（错误码透传，协调器计
+         * arbiter_unavailable 并发事件），C 确定性判定语义不变。 */
         AIRY_LOG_WARN("GRAD-B: arbiter LLM unavailable (err=%d), deferring to Model C",
                       (int)err);
-        return AIRY_SUCCESS;
+        return err != AIRY_SUCCESS ? err : AIRY_ESERVICE;
     }
 
     if (ctx->workspace_root && ctx->plan_id) {
