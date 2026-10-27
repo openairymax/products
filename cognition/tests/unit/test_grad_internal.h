@@ -144,4 +144,13 @@ void test_c13_budget_skip(void);
 void test_c13_j16_stop(void);
 void test_c13_golden(void);
 
+/* GRAD 上下文预算域（test_grad_c12.c，0.1.20 C12 / §5.2b.9） */
+void test_ctxb_est(void);
+void test_ctxb_resolve_off(void);
+void test_ctxb_resolve(void);
+void test_ctxb_k_update(void);
+void test_ctxb_char_cap(void);
+void test_ctxb_sem_gate(void);
+void test_ctxb_sem_cap_grows(void);
+
 #endif /* TEST_GRAD_INTERNAL_H */

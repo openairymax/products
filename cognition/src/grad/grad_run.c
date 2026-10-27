@@ -53,6 +53,13 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     /* 0.1.20 T3/T4：增量 patch 与流式位经 launch 快照透传（0 缺省安全）。 */
     grad_ctx.incremental_patch = launch->incremental_patch ? 1u : 0u;
     grad_ctx.stream = launch->stream ? 1 : 0;
+    /* 0.1.20 C12：n_ctx_slot=0 时域关闭（回滚开关；D2-9 接线真实源）。
+     * 并发闸为进程级单例，daemon prepare 期单线程先行，此处防御性幂等。 */
+    grad_ctx.max_concurrent = launch->max_concurrent;
+    grad_ctx.server_parallel = launch->server_parallel;
+    grad_ctxb_resolve(&grad_ctx.ctxb, launch->n_ctx_slot,
+                      grad_ctx.max_tokens ? grad_ctx.max_tokens : 4096);
+    grad_ctxb_sem_init();
 
     airy_err_t trace_err = grad_llm_trace_open(&grad_ctx);
     if (trace_err != AIRY_SUCCESS)

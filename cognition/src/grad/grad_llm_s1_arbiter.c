@@ -13,7 +13,8 @@
  *      为固定模板 patch；
  *   2) 装配没有预算概念，长计划直接把上下文顶爆。
  *
- * 现按六级优先级装配（预算 GRAD_ARBITER_PROMPT_MAX_CHARS）：
+ * 现按六级优先级装配（预算由 C12 char_cap 派生，域关闭时回退
+ * GRAD_ARBITER_PROMPT_MAX_CHARS）：
  *   1. goal（不裁；超 GRAD_ARBITER_GOAL_MAX_CHARS 截断并标 goal_truncated）
  *   2. C 验证报告（不裁）
  *   3. 审查焦点节点全文（guard 节点 ∪ 报告 affected_node，上限 8）
@@ -217,10 +218,21 @@ static void nd_full(abuf_t *b, const airy_task_node_t *n)
 
 static void nd_sum(abuf_t *b, const airy_task_node_t *n)
 {
-    ab_put(b, "- %s | role=%s | prio=%u | depends=",
+    /* §5.2b.9 S3：摘要行 goal 截 120 字符（UTF-8 安全），截断加注。 */
+    const char *g = n->task_node_goal ? n->task_node_goal : "";
+    char gc[121];
+    int cut = 0;
+    if (strlen(g) > 120) {
+        size_t n8 = u8_cut(g, 120);
+        AIRY_MEMCPY(gc, g, n8);
+        gc[n8] = '\0';
+        g = gc;
+        cut = 1;
+    }
+    ab_put(b, "- %s | role=%s | prio=%u | goal=%s%s | depends=",
            n->task_node_id ? n->task_node_id : "?",
            n->task_node_agent_role ? n->task_node_agent_role : "-",
-           (unsigned)n->task_node_priority);
+           (unsigned)n->task_node_priority, g, cut ? "[cut]" : "");
     nd_deps(b, n);
     ab_add(b, "\n");
 }
@@ -255,11 +267,19 @@ static void hist_push(grad_llm_ctx_t *ctx, const grad_verdict_t *v)
 /**
  * @brief 构建 B 的 user prompt（六级装配，见文件头）。
  *
- * @ownership 返回串由调用方 AIRY_FREE；OOM 返回 NULL。
+ * @param over_budget [out] C12 激活且不可裁核心超预算时置 1（返回 NULL）
+ * @param out_omitted [out] 预算内放不下而被丢弃的摘要节点数（可 NULL）
+ * @ownership 返回串由调用方 AIRY_FREE；OOM 或超预算返回 NULL。
  */
 static char *arb_build_prompt(const airy_gccp_goal_t *goal, const airy_grad_report_t *report,
-                              const airy_task_plan_t *plan, const grad_llm_ctx_t *ctx)
+                              const airy_task_plan_t *plan, const grad_llm_ctx_t *ctx,
+                              int *over_budget, size_t *out_omitted)
 {
+    if (over_budget)
+        *over_budget = 0;
+    if (out_omitted)
+        *out_omitted = 0;
+
     char *goal_json = grad_goal_to_json(goal, ctx);
     const char *gfrag = goal_json ? goal_json : "null";
     int goal_cut = 0;
@@ -318,11 +338,19 @@ static char *arb_build_prompt(const airy_gccp_goal_t *goal, const airy_grad_repo
     for (uint32_t i = 0; i < ctx->round_hist_count; i++)
         ab_put(&hist, "%s\n", ctx->round_hist[i]);
 
-    /* 预算：1-3 级不可裁，若其本身已超预算则允许溢出但不再追加摘要 */
+    /* 预算（C12 §5.2b.9）：cap 由 n_ctx_slot 派生（域关闭时回退
+     * GRAD_ARBITER_PROMPT_MAX_CHARS）。1-3 级不可裁；cap 内放不下核心
+     * 时返回 NULL + over_budget=1（fail-closed，B 侧弃权、采纳 C 的
+     * 确定性判定）。域关闭时保持旧行为（允许溢出、丢摘要），零回归。 */
     size_t footer = sizeof(ARB_FOOTER) - 1;
-    size_t limit = GRAD_ARBITER_PROMPT_MAX_CHARS;
+    size_t limit = grad_ctxb_char_cap(&ctx->ctxb);
     size_t base = core.len + guards.len + hist.len + footer + 128;
     if (base > limit) {
+        if (grad_ctxb_active(&ctx->ctxb)) {
+            if (over_budget)
+                *over_budget = 1;
+            goto done;
+        }
         AIRY_LOG_WARN("GRAD-B: prompt core %zu exceeds budget %d, summaries dropped", base,
                       GRAD_ARBITER_PROMPT_MAX_CHARS);
         limit = base;
@@ -357,6 +385,8 @@ static char *arb_build_prompt(const airy_gccp_goal_t *goal, const airy_grad_repo
             ab_free(&line);
         }
     }
+    if (out_omitted)
+        *out_omitted = omitted;
 
     out = (char *)AIRY_MALLOC(core.len + sums.len + guards.len + hist.len + footer + 256);
     if (out) {
@@ -426,8 +456,28 @@ airy_err_t grad_llm_s1_arbiter(const airy_gccp_goal_t *goal, const airy_grad_rep
         }
     }
 
-    char *prompt = arb_build_prompt(g, report, plan, ctx);
+    int over_budget = 0;
+    size_t omitted = 0;
+    char *prompt = arb_build_prompt(g, report, plan, ctx, &over_budget, &omitted);
+
+    /* C12：预算快照落决策链（仅激活时），供回溯审计与容量调参。 */
+    if (grad_ctxb_active(&ctx->ctxb)) {
+        char tb[192];
+        snprintf(tb, sizeof(tb),
+                 "{\"n_ctx_slot\":%u,\"send_budget\":%u,\"prompt_chars\":%zu,"
+                 "\"over_budget\":%d,\"omitted_nodes\":%zu}",
+                 ctx->ctxb.n_ctx_slot, ctx->ctxb.send_budget,
+                 prompt ? strlen(prompt) : 0, over_budget, omitted);
+        grad_llm_trace_append(ctx, "ctx_budget", tb);
+    }
+
     if (!prompt) {
+        if (over_budget) {
+            /* C12 fail-closed：不可裁核心超预算，B 弃权（返回 ERANGE，
+             * 协调器按错误处理即采纳 C 的确定性判定）。 */
+            AIRY_LOG_WARN("GRAD-B: prompt over C12 budget, deferring to Model C");
+            return AIRY_ERANGE;
+        }
         AIRY_LOG_WARN("GRAD-B: prompt assembly failed (OOM), deferring to Model C");
         return AIRY_SUCCESS;
     }

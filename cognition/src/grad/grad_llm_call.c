@@ -54,6 +54,30 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
      * 与非流式同构，下方 C11 完整性检查两态共用。 */
     llm_cfg.stream = ctx->stream ? 1 : 0;
 
+    /* C12（§5.2b.9）：预算闸在排队之前（便宜守卫优先）——est×k 超出
+     * 单次发送预算直接 AIRY_ERANGE（域关闭时零行为）；排队（进程级
+     * 并发闸）超时 AIRY_EBUSY。两者同为 fail-closed：上游采纳模型 C
+     * 的确定性判定。激活时同步回写发送上限（响应预留保障）。 */
+    size_t est = grad_ctxb_est(system) + grad_ctxb_est(user);
+    if (grad_ctxb_active(&ctx->ctxb)) {
+        double pred = (double)est * ctx->ctxb.k;
+        if (pred > (double)ctx->ctxb.send_budget) {
+            AIRY_LOG_WARN("GRAD-LLM: over budget (est=%zu k=%.2f send=%u)", est,
+                          ctx->ctxb.k, ctx->ctxb.send_budget);
+            return AIRY_ERANGE;
+        }
+        uint32_t slot_left = ctx->ctxb.n_ctx_slot - (uint32_t)est;
+        llm_cfg.max_tokens =
+            (uint32_t)llm_cfg.max_tokens < slot_left ? llm_cfg.max_tokens : (int)slot_left;
+        if (llm_cfg.max_tokens < 1)
+            llm_cfg.max_tokens = 1;
+    }
+
+    airy_err_t gate = grad_ctxb_sem_acquire(ctx->max_concurrent, ctx->server_parallel,
+                                            GRAD_INFLIGHT_QUEUE_MS);
+    if (gate != AIRY_SUCCESS)
+        return gate;
+
     /* 响应释放入口来自注入的 LLM ops 表（llm_d），表缺失时跳过释放。 */
     const airy_llm_ops_t *llm_ops = are_ops_get_llm();
 
@@ -64,6 +88,7 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
         !resp->choices[0].content) {
         if (resp && llm_ops && llm_ops->response_free)
             llm_ops->response_free(resp);
+        grad_ctxb_sem_release();
         AIRY_LOG_WARN("GRAD-LLM: call failed (ret=%d)", ret);
         return AIRY_ESERVICE;
     }
@@ -76,6 +101,7 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
         strcmp(fr, LLM_FINISH_CONTENT_FILTER) == 0) {
         if (llm_ops && llm_ops->response_free)
             llm_ops->response_free(resp);
+        grad_ctxb_sem_release();
         AIRY_LOG_WARN("GRAD-LLM: incomplete output (finish_reason=%s)",
                       fr ? fr : "absent");
         return AIRY_ESERVICE;
@@ -86,6 +112,7 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
     if (!text) {
         if (llm_ops && llm_ops->response_free)
             llm_ops->response_free(resp);
+        grad_ctxb_sem_release();
         return AIRY_ENOMEM;
     }
     __builtin_memcpy(text, resp->choices[0].content, len);
@@ -96,6 +123,10 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
     ctx->usage[role].prompt += resp->prompt_tokens;
     ctx->usage[role].completion += resp->completion_tokens;
     ctx->usage[role].total += resp->total_tokens;
+
+    /* C12：真实 prompt token 回馈 k（EWMA），后续轮次预算收敛到真值。 */
+    grad_ctxb_k_update(&ctx->ctxb, est, resp->prompt_tokens);
+    grad_ctxb_sem_release();
 
     *out_text = text;
     *out_len = len;
