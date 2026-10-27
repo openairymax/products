@@ -126,6 +126,350 @@ static airy_err_t grad_scope_one(const char *id, char ***out_scope, size_t *out_
     return AIRY_SUCCESS;
 }
 
+/* 失败码 → 契约缺陷码串（C 判据 patch 与 A 历史缺陷序列共用，避免
+ * 同一映射在两处漂移）。E-00 仅用于枚举外的内部错误兜底。 */
+static const char *grad_error_code(airy_grad_error_t e)
+{
+    switch (e) {
+    case AIRY_GRAD_E01_CAUSAL_BREAK:
+        return "E-01";
+    case AIRY_GRAD_E02_DEADLOCK:
+        return "E-02";
+    case AIRY_GRAD_E03_RESOURCE_OVER:
+        return "E-03";
+    case AIRY_GRAD_E05_VERIFY_INSUFFICIENT:
+        return "E-05";
+    case AIRY_GRAD_E04_GUARD_DRIFT:
+        return "E-04";
+    default:
+        return "E-00";
+    }
+}
+
+/* 失败路径仲裁来源（A 侧历史 arbiter 字段与统计计数共用） */
+typedef enum {
+    GRAD_ARB_TAG_NONE = 0,    /**< B 未参与（策略关闭/节点不可定位） */
+    GRAD_ARB_TAG_ACCEPT,      /**< B 认可 C 的否定，沿用 C 模板 patch */
+    GRAD_ARB_TAG_REJECT,      /**< B 定向驳回，patch 由 B 缺陷派生 */
+    GRAD_ARB_TAG_SKIP_BUDGET  /**< 预算不足跳过仲裁 */
+} grad_arb_tag_t;
+
+/** @brief 失败路径分流产物（patch/scope 为 OWNER，整体移交调用方）。 */
+typedef struct grad_fail_out {
+    char *patch;
+    char **scope;
+    size_t scope_count;
+    grad_arb_tag_t tag;
+    char arb[32]; /**< A 侧历史 arbiter 字段（accept/reject(...)/skipped_budget） */
+} grad_fail_out_t;
+
+static void grad_fo_free(grad_fail_out_t *o)
+{
+    if (!o)
+        return;
+    if (o->patch) {
+        AIRY_FREE(o->patch);
+        o->patch = NULL;
+    }
+    grad_scope_free(&o->scope, &o->scope_count);
+    o->tag = GRAD_ARB_TAG_NONE;
+    o->arb[0] = '\0';
+}
+
+/**
+ * @brief 输入片段 token 近似（§5.2b.9：est_tokens = ceil(utf8_bytes/3)）。
+ *
+ * 真实预算的上界须由 C12 的 n_ctx_slot 派生（per-slot prompt_budget），
+ * 本值仅用于把"这一轮 B 会吃掉多少上下文"计入 A 历史与统计，非上界。
+ */
+static int64_t grad_est_tokens(const char *s)
+{
+    if (!s || !s[0])
+        return 0;
+    return (int64_t)((strlen(s) + 2) / 3);
+}
+
+/* 计划内按 id 查节点（失败节点全文注入的前提；查不到即 B 盲判，须跳过） */
+static const airy_task_node_t *grad_node_find(const airy_task_plan_t *plan, const char *id)
+{
+    if (!plan || !id || !id[0])
+        return NULL;
+    for (size_t i = 0; i < plan->task_plan_node_count; i++) {
+        const airy_task_node_t *n = plan->task_plan_nodes[i];
+        if (n && n->task_node_id && strcmp(n->task_node_id, id) == 0)
+            return n;
+    }
+    return NULL;
+}
+
+/** @brief A/B 共享的轮次历史环（保留最近 GRAD_ARBITER_MAX_HISTORY 条）。 */
+typedef struct grad_hist_ring {
+    grad_round_hist_t e[GRAD_ARBITER_MAX_HISTORY];
+    size_t n;
+} grad_hist_ring_t;
+
+static void grad_hist_clr(grad_round_hist_t *h)
+{
+    if (!h)
+        return;
+    grad_scope_free(&h->scope, &h->scope_count);
+    h->round = 0;
+    h->codes[0] = '\0';
+}
+
+static void grad_hist_free(grad_hist_ring_t *r)
+{
+    if (!r)
+        return;
+    for (size_t i = 0; i < r->n; i++)
+        grad_hist_clr(&r->e[i]);
+    r->n = 0;
+}
+
+/**
+ * @brief 追加一轮 C 失败记录（codes 为 C 缺陷码，scope 为本轮修补范围）。
+ *
+ * scope 深拷贝：调用方的 delta_scope 仍属下一轮验证，不得移交所有权。
+ */
+static airy_err_t grad_hist_push(grad_hist_ring_t *r, uint32_t round, airy_grad_error_t code,
+                                 const char *const *scope, size_t scope_count)
+{
+    if (r->n >= GRAD_ARBITER_MAX_HISTORY) {
+        grad_hist_clr(&r->e[0]);
+        for (size_t i = 1; i < r->n; i++)
+            r->e[i - 1] = r->e[i];
+        r->n--;
+    }
+    grad_round_hist_t *slot = &r->e[r->n];
+    __builtin_memset(slot, 0, sizeof(*slot));
+    slot->round = round;
+    snprintf(slot->codes, sizeof(slot->codes), "%s", grad_error_code(code));
+    if (scope_count) {
+        slot->scope = (char **)AIRY_CALLOC(scope_count, sizeof(char *));
+        if (!slot->scope)
+            return AIRY_ENOMEM;
+        for (size_t i = 0; i < scope_count; i++) {
+            slot->scope[i] = AIRY_STRDUP(scope[i] ? scope[i] : "");
+            if (!slot->scope[i]) {
+                grad_hist_clr(slot);
+                return AIRY_ENOMEM;
+            }
+            slot->scope_count++;
+        }
+    }
+    r->n++;
+    return AIRY_SUCCESS;
+}
+
+/* 两轮"同一缺陷 + 同一范围"（集合语义，顺序无关） */
+static int grad_hist_same(const grad_round_hist_t *a, const grad_round_hist_t *b)
+{
+    if (strcmp(a->codes, b->codes) != 0)
+        return 0;
+    if (a->scope_count != b->scope_count)
+        return 0;
+    for (size_t i = 0; i < a->scope_count; i++) {
+        int hit = 0;
+        for (size_t j = 0; j < b->scope_count; j++) {
+            if (strcmp(a->scope[i], b->scope[j]) == 0) {
+                hit = 1;
+                break;
+            }
+        }
+        if (!hit)
+            return 0;
+    }
+    return 1;
+}
+
+/** @brief J-16 无进展：连续两轮缺陷码序列与修补范围完全相同。 */
+static int grad_hist_stall(const grad_hist_ring_t *r)
+{
+    return r && r->n >= 2 && grad_hist_same(&r->e[r->n - 2], &r->e[r->n - 1]);
+}
+
+/*
+ * 失败路径 B 定向仲裁（§5.2b.11）：装配权威七字段 → 预算判定 → 调用 B
+ * → 契约解析 → 缺陷派生 → patch 分流（B 产物为 OWNER）。
+ *
+ * 返回 AIRY_SUCCESS 且 out->patch==NULL 表示"按 C 模板 patch 继续"：B 未
+ * 参与、B 认可 C 的否定、或 B 自身故障（记 arbiter_internal_error）。
+ * 失败路径上 B 只细化"怎么修"，不把 C 的否定翻成成功（fail-closed）。
+ */
+static airy_err_t grad_fail_arb(airy_grad_coordinator_t *coord, const airy_gccp_goal_t *goal,
+                                const airy_task_plan_t *plan, uint32_t k,
+                                const airy_grad_report_t *report, grad_hist_ring_t *hist,
+                                uint64_t round_start_ns, grad_fail_out_t *out)
+{
+    const airy_task_node_t *fnode = grad_node_find(plan, report->affected_node);
+    if (!fnode)
+        return AIRY_SUCCESS; /* 节点不可定位 → 不给 B 盲判的机会 */
+
+    int64_t used_ms = (int64_t)((airy_time_monotonic_ns() - round_start_ns) / 1000000ULL);
+    if (coord->config.budget.time_ms > 0 && used_ms >= coord->config.budget.time_ms) {
+        coord->stats.arbiter_skipped_budget++;
+        out->tag = GRAD_ARB_TAG_SKIP_BUDGET;
+        snprintf(out->arb, sizeof(out->arb), "skipped_budget");
+        grad_progress(coord, 0, "grad_arbiter_failure_skip", "{\"reason\":\"budget\"}");
+        return AIRY_SUCCESS;
+    }
+
+    char *goal_json = grad_goal_to_json(goal, NULL);
+    char *c_report = NULL;
+    char *fnode_json = NULL;
+    char *nbr_json = NULL;
+    char *hist_json = NULL;
+    airy_err_t rc = goal_json ? AIRY_SUCCESS : AIRY_ENOMEM;
+    if (rc == AIRY_SUCCESS)
+        rc = grad_c_report_json(report, &c_report);
+    if (rc == AIRY_SUCCESS)
+        rc = grad_node_to_json(fnode, &fnode_json);
+    if (rc == AIRY_SUCCESS)
+        rc = grad_neighbors_to_json(plan, report->affected_node, &nbr_json);
+    if (rc == AIRY_SUCCESS)
+        rc = grad_hist_to_json(hist->e, hist->n, &hist_json);
+    if (rc != AIRY_SUCCESS) {
+        AIRY_LOG_WARN("GRAD-B: failure prompt assembly failed (err=%d)", (int)rc);
+        AIRY_FREE(goal_json);
+        AIRY_FREE(c_report);
+        AIRY_FREE(fnode_json);
+        AIRY_FREE(nbr_json);
+        AIRY_FREE(hist_json);
+        return rc;
+    }
+
+    grad_arb_fail_in_t in;
+    __builtin_memset(&in, 0, sizeof(in));
+    in.goal_json = goal_json;
+    in.c_report_json = c_report;
+    in.failed_node_json = fnode_json;
+    in.neighbors_json = nbr_json;
+    in.round = k;
+    in.round_history_json = hist_json;
+    in.token_budget = grad_est_tokens(goal_json) + grad_est_tokens(c_report) +
+                      grad_est_tokens(fnode_json) + grad_est_tokens(nbr_json) +
+                      grad_est_tokens(hist_json);
+
+    char *verdict = NULL;
+    coord->stats.arbiter_failure_calls++;
+    airy_err_t aerr = coord->config.s1_failure(&in, &verdict, coord->config.s1_user_data);
+    AIRY_FREE(goal_json);
+    AIRY_FREE(c_report);
+    AIRY_FREE(fnode_json);
+    AIRY_FREE(nbr_json);
+    AIRY_FREE(hist_json);
+
+    grad_arb_fail_t f;
+    __builtin_memset(&f, 0, sizeof(f));
+    int parsed = verdict && aerr == AIRY_SUCCESS &&
+                 grad_arb_fail_parse(verdict, plan, &f) == AIRY_SUCCESS;
+    AIRY_FREE(verdict);
+    if (!parsed) {
+        /* B 超时/非 JSON/契约违例：回退 C 模板 patch，不阻塞修复环 */
+        coord->stats.arbiter_internal_error++;
+        AIRY_LOG_WARN("GRAD-B: failure arbitration unusable (err=%d), C patch kept", (int)aerr);
+        grad_progress(coord, 0, "grad_arbiter_failure_error", "{\"fallback\":\"c_patch\"}");
+        return AIRY_SUCCESS;
+    }
+
+    if (f.kind == GRAD_VD_ACCEPT) {
+        snprintf(out->arb, sizeof(out->arb), "accept");
+        grad_arb_fail_free(&f);
+        return AIRY_SUCCESS;
+    }
+
+    out->tag = GRAD_ARB_TAG_REJECT;
+    snprintf(out->arb, sizeof(out->arb), "%s",
+             strcmp(f.defect_class, "SEM") == 0 ? "reject(semantic)" : "reject(structural)");
+
+    grad_defect_t *defects = NULL;
+    size_t dcount = 0;
+    char **scope = NULL;
+    size_t scount = 0;
+    size_t closure = 0;
+
+    int salvage = f.salvageable;
+    if (salvage) {
+        rc = grad_arb_fail_defects(&f, &defects, &dcount);
+        if (rc == AIRY_SUCCESS)
+            rc = grad_patch_scope(plan, defects, dcount, &scope, &scount, &closure);
+        if (rc == AIRY_SUCCESS)
+            rc = grad_patch_build(k, defects, dcount, (const char *const *)scope, scount,
+                                  &out->patch);
+    } else {
+        rc = AIRY_EINVAL; /* 不可增量：直接整份重绘 */
+    }
+    grad_arb_fail_free(&f);
+    AIRY_FREE(defects);
+
+    if (rc == AIRY_SUCCESS) {
+        out->scope = scope;
+        out->scope_count = scount;
+        coord->stats.arbiter_failure_override++;
+        AIRY_LOG_INFO("GRAD-B: failure repair localized (scope=%zu closure=%zu)", scount, closure);
+        return AIRY_SUCCESS;
+    }
+
+    grad_scope_free(&scope, &scount);
+    if (!salvage) {
+        AIRY_LOG_WARN("GRAD-B: failure repair not salvageable, full redraw");
+    } else if (rc != AIRY_E2BIG) {
+        /* salvageable 但 scope 不可定位（含空 scope）：P0-7 负向用例③，
+         * 判 patch_invalid 并回退全量重绘，不做无落点的重试。E2BIG 是
+         * 闭包超界的正常升级路径，不属 patch_invalid。 */
+        AIRY_LOG_WARN("GRAD-B: failure patch_invalid (err=%d), full redraw", (int)rc);
+        grad_progress(coord, 0, "grad_patch_invalid", "{\"action\":\"full_redraw\"}");
+    }
+    rc = grad_patch_full(plan, k, NULL, 0, &out->patch);
+    if (rc != AIRY_SUCCESS)
+        return rc;
+    coord->stats.arbiter_failure_override++;
+    return AIRY_SUCCESS;
+}
+
+/**
+ * @brief C 失败分流：B 定向仲裁（可跳过）→ 回退 C 判据模板 patch。
+ *
+ * out->patch==NULL 仅在 B 未参与/认可 C/自身故障时出现，此时本函数补齐
+ * C 模板 patch 与单节点复验 scope；B 产物路径的 scope 由 B 缺陷闭包决定。
+ */
+static airy_err_t grad_fail_stage(airy_grad_coordinator_t *coord, const airy_gccp_goal_t *goal,
+                                  const airy_task_plan_t *plan, uint32_t k,
+                                  const airy_grad_report_t *report, grad_hist_ring_t *hist,
+                                  uint64_t round_start_ns, grad_fail_out_t *out)
+{
+    __builtin_memset(out, 0, sizeof(*out));
+    out->tag = GRAD_ARB_TAG_NONE;
+    snprintf(out->arb, sizeof(out->arb), "accept");
+
+    if (coord->config.s1_failure &&
+        grad_arb_fail_wanted(coord->config.arbiter_on_failure, report->error, plan,
+                             report->affected_node)) {
+        airy_err_t rc = grad_fail_arb(coord, goal, plan, k, report, hist, round_start_ns, out);
+        if (rc != AIRY_SUCCESS)
+            return rc;
+        if (out->patch)
+            return AIRY_SUCCESS;
+    }
+
+    char *patch = NULL;
+    airy_err_t rc = airy_grad_build_patch(report, k, &patch);
+    if (rc != AIRY_SUCCESS || !patch)
+        return rc != AIRY_SUCCESS ? rc : AIRY_ESERVICE;
+    out->patch = patch;
+    /* E-03 的 affected_node 为 "aggregate"（非真实节点 ID），"all"/"aggregate"
+     * 语义即"全量"：置空 scope 保持全量验证，不做无意义的 scope 空转。 */
+    if (report->affected_node[0] && strcmp(report->affected_node, "all") != 0 &&
+        strcmp(report->affected_node, "aggregate") != 0) {
+        rc = grad_scope_one(report->affected_node, &out->scope, &out->scope_count);
+        if (rc != AIRY_SUCCESS) {
+            grad_fo_free(out);
+            return rc;
+        }
+    }
+    return AIRY_SUCCESS;
+}
+
 /*
  * B 终裁阶段：严格解析裁决契约（§5.2b.4）→ θ_B 折让 → Δk 修补分流。
  *
@@ -161,6 +505,13 @@ static airy_err_t grad_arb_stage(airy_grad_coordinator_t *coord, const airy_task
             AIRY_LOG_INFO("GRAD-B: low-confidence objection ignored (conf=%.2f)", v.confidence);
         grad_verdict_free(&v);
         return AIRY_SUCCESS;
+    }
+
+    /* 决策④（C13）：opinion 不得丢弃——缺陷条目缺 suggestion 时以
+     * opinion 补齐，否则 A 侧只拿到空建议（等于丢失 B 的定位结论）。 */
+    for (size_t i = 0; i < v.defect_count; i++) {
+        if (!v.defects[i].suggestion[0])
+            grad_copy_fld(v.defects[i].suggestion, sizeof(v.defects[i].suggestion), v.opinion);
     }
 
     int full = force_full;
@@ -300,9 +651,15 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
     size_t delta_scope_count = 0;
     /* patch_inconsistent 后的下一轮：跳过增量 scope，强制整份重绘 */
     int force_full = 0;
+    /* C13 决策③：A/B 共享的失败轮次环（仅 C 失败轮入环，J-16 依据末两条） */
+    grad_hist_ring_t hist;
+    __builtin_memset(&hist, 0, sizeof(hist));
     uint32_t k = 0;
     for (k = 0; k < coord->config.max_iterations; k++) {
         grad_pmode_t pmode = GRAD_PATCH_C;
+        /* 本轮起始时刻：失败路径 B 预算判定（arbiter_skipped_budget）基准 */
+        uint64_t round_start_ns = airy_time_monotonic_ns();
+        int no_prog = 0;
         airy_grad_report_t report;
         __builtin_memset(&report, 0, sizeof(report));
 
@@ -428,33 +785,44 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
                 break;
             }
         } else {
-
-            char *patch = NULL;
-            err = airy_grad_build_patch(&report, k, &patch);
-            if (err != AIRY_SUCCESS || !patch) {
-                AIRY_LOG_WARN("GRAD: build_patch failed (err=%d)", (int)err);
-                loop_err = err ? err : AIRY_ESERVICE;
+            /* C 失败路径（C13）：B 定向仲裁优先，B 未参与/认可 C/自身故障
+             * 时回退 C 判据模板 patch；B 的 Δk 产物为 OWNER。 */
+            grad_fail_out_t fo;
+            err = grad_fail_stage(coord, goal, plan, k, &report, &hist, round_start_ns, &fo);
+            if (err != AIRY_SUCCESS) {
+                AIRY_LOG_WARN("GRAD: failure stage failed (err=%d)", (int)err);
+                loop_err = err;
                 break;
             }
-            round.patch_json = patch;
-
+            round.patch_json = fo.patch;
+            fo.patch = NULL;
             grad_scope_free(&delta_scope, &delta_scope_count);
-            /* E-03 资源超限的 affected_node 为 "aggregate"（非真实节点
-             * ID），"all"/"aggregate" 语义即"全量"：置空 scope 保持全量
-             * 验证，不做无意义的 scope 空转。 */
-            if (report.affected_node[0] && strcmp(report.affected_node, "all") != 0 &&
-                strcmp(report.affected_node, "aggregate") != 0) {
-                err = grad_scope_one(report.affected_node, &delta_scope, &delta_scope_count);
-                if (err != AIRY_SUCCESS) {
-                    AIRY_FREE(round.patch_json);
-                    round.patch_json = NULL;
-                    loop_err = err;
-                    break;
+            delta_scope = fo.scope;
+            delta_scope_count = fo.scope_count;
+            fo.scope = NULL;
+            fo.scope_count = 0;
+            pmode = (fo.tag == GRAD_ARB_TAG_REJECT)
+                        ? (delta_scope_count ? GRAD_PATCH_INCR : GRAD_PATCH_FULL)
+                        : GRAD_PATCH_C;
+            if (grad_hist_push(&hist, k, report.error, (const char *const *)delta_scope,
+                               delta_scope_count) == AIRY_SUCCESS) {
+                if (coord->config.round_note_cb) {
+                    grad_round_note_t note;
+                    __builtin_memset(&note, 0, sizeof(note));
+                    note.round = k;
+                    note.codes = grad_error_code(report.error);
+                    note.scope = (const char *const *)delta_scope;
+                    note.scope_count = delta_scope_count;
+                    note.arbiter = fo.arb;
+                    (void)coord->config.round_note_cb(coord->config.round_note_user_data, &note);
                 }
+                no_prog = grad_hist_stall(&hist);
             }
-            AIRY_LOG_INFO("GRAD: round %u rejected (%s) scope=%s", (unsigned)k,
-                          airy_grad_error_str(report.error),
-                          report.affected_node[0] ? report.affected_node : "all");
+            AIRY_LOG_INFO("GRAD: round %u rejected (%s) scope=%zu repair=%s", (unsigned)k,
+                          airy_grad_error_str(report.error), delta_scope_count, fo.arb);
+            grad_fo_free(&fo);
+            /* 本轮已整份替换计划（C 模板或全量重绘），force_full 已被消费 */
+            force_full = 0;
         }
 
         err = grad_record_round(coord, &round);
@@ -462,6 +830,19 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             if (round.patch_json)
                 AIRY_FREE(round.patch_json);
             loop_err = err;
+            break;
+        }
+
+        if (no_prog) {
+            /* J-16：连续两轮缺陷码序列与修补范围完全相同 → 修复环已无信息
+             * 增益，fail-closed 停止（不发第 3 轮），交上层人工/策略处置。 */
+            coord->stats.stopped = 1;
+            AIRY_LOG_WARN("GRAD: no progress between consecutive rounds, stop (J-16)");
+            grad_progress(coord, 0, "grad_no_progress", "{\"action\":\"stop\"}");
+            if (round.patch_json) {
+                AIRY_FREE(round.patch_json);
+                round.patch_json = NULL;
+            }
             break;
         }
 
@@ -508,7 +889,9 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
     }
 
     if (!coord->stats.converged) {
-        if (loop_err != AIRY_SUCCESS) {
+        if (coord->stats.stopped) {
+            AIRY_LOG_ERROR("GRAD: stopped early (no progress, J-16), plan rejected");
+        } else if (loop_err != AIRY_SUCCESS) {
             /* 服务错误/OOM 中止（区别于迭代耗尽）：调用方可据此重试/降级，
              * 而非一律当作"未收敛"转人工评审。 */
             AIRY_LOG_ERROR("GRAD: loop aborted by service error (err=%d), plan rejected",
@@ -521,6 +904,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
     }
 
     grad_scope_free(&delta_scope, &delta_scope_count);
+    grad_hist_free(&hist);
 
     coord->stats.total_rounds = (uint32_t)coord->rounds_count; /* size_t→u32（C4267） */
     coord->stats.total_time_ns = airy_time_monotonic_ns() - start_ns;
@@ -627,26 +1011,7 @@ airy_err_t airy_grad_build_patch(const airy_grad_report_t *report, uint32_t iter
         return AIRY_EINVAL;
     *out_patch = NULL;
 
-    const char *code = "E-00";
-    switch (report->error) {
-    case AIRY_GRAD_E01_CAUSAL_BREAK:
-        code = "E-01";
-        break;
-    case AIRY_GRAD_E02_DEADLOCK:
-        code = "E-02";
-        break;
-    case AIRY_GRAD_E03_RESOURCE_OVER:
-        code = "E-03";
-        break;
-    case AIRY_GRAD_E05_VERIFY_INSUFFICIENT:
-        code = "E-05";
-        break;
-    case AIRY_GRAD_E04_GUARD_DRIFT:
-        code = "E-04";
-        break;
-    default:
-        break;
-    }
+    const char *code = grad_error_code(report->error);
 
     const char *suggestion = "review and fix the plan";
     switch (report->error) {

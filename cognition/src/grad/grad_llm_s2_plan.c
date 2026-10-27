@@ -58,7 +58,11 @@ char *grad_goal_to_json(const airy_gccp_goal_t *goal, const grad_llm_ctx_t *ctx)
 }
 
 /**
- * @brief Build model A's user prompt (goal G + rejection patch).
+ * @brief Build model A's user prompt (goal G + rejection patch + round history).
+ *
+ * C13 决策③：patch 分支注入 "Previous rounds" 段（≤3 条，来自
+ * round_note_cb 写入的 ctx->a_hist），A 因此知道此前哪些缺陷已被 C 拒绝、
+ * 修补范围多大，避免重复提交同一计划。
  */
 static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goal_t *goal,
                                   const char *patch_json)
@@ -67,7 +71,11 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
     if (!goal_json)
         return NULL;
 
-    size_t cap = strlen(goal_json) + 2048;
+    size_t hist_len = 0;
+    for (uint32_t i = 0; i < ctx->a_hist_count; i++)
+        hist_len += strlen(ctx->a_hist[i]) + 4;
+
+    size_t cap = strlen(goal_json) + 2048 + hist_len;
     if (patch_json)
         cap += strlen(patch_json);
     char *prompt = (char *)AIRY_MALLOC(cap);
@@ -77,11 +85,31 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
     }
 
     if (patch_json && patch_json[0]) {
-        snprintf(prompt, cap,
-                 "Confirmed goal (G): %s\n\n"
-                 "Rejected patch (apply this fix, do not regress unchanged nodes):\n%s\n\n"
-                 "Generate the FULL corrected plan JSON (all nodes, consistent with the patch).",
-                 goal_json, patch_json);
+        size_t off = (size_t)snprintf(prompt, cap,
+                                      "Confirmed goal (G): %s\n\n"
+                                      "Rejected patch (apply this fix, do not regress "
+                                      "unchanged nodes):\n%s\n\n",
+                                      goal_json, patch_json);
+        if (off >= cap)
+            off = cap - 1;
+        if (ctx->a_hist_count) {
+            off += (size_t)snprintf(prompt + off, cap - off,
+                                    "Previous rounds (most recent last, max %d):\n",
+                                    GRAD_ARBITER_MAX_HISTORY);
+            if (off >= cap)
+                off = cap - 1;
+            for (uint32_t i = 0; i < ctx->a_hist_count && off < cap - 1; i++)
+                off += (size_t)snprintf(prompt + off, cap - off, "  %s\n", ctx->a_hist[i]);
+            if (off >= cap)
+                off = cap - 1;
+            off += (size_t)snprintf(prompt + off, cap - off,
+                                    "Do NOT reproduce the same defect. If the same defect "
+                                    "recurs, state why the plan cannot avoid it.\n\n");
+            if (off >= cap)
+                off = cap - 1;
+        }
+        snprintf(prompt + off, cap - off,
+                 "Generate the FULL corrected plan JSON (all nodes, consistent with the patch).");
     } else {
         snprintf(prompt, cap,
                  "Confirmed goal (G): %s\n\n"
