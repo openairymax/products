@@ -78,14 +78,14 @@ void run_arb_verdict(const char *verdict_json, int expect_fix_loop, const char *
             TEST_FAIL(case_name, msg);
         }
     } else {
-        /* defer to C → 收敛，无再生成，seed 原样返回（BORROW → final==NULL）*/
+        /* defer to C → 收敛，无再生成（G53：过门 seed 以深拷贝传出）*/
         if (err == AIRY_SUCCESS && stats.converged && s2mc.s2_call_count == 0 &&
-            final == NULL) {
+            final && final != seed) {
             TEST_PASS(case_name);
         } else {
             snprintf(msg, sizeof(msg),
-                     "expected converge+defer, got err=%d conv=%d s2=%d final=%p", (int)err,
-                     stats.converged, s2mc.s2_call_count, (void *)final);
+                     "expected converge+defer+deepcopy, got err=%d conv=%d s2=%d final=%p",
+                     (int)err, stats.converged, s2mc.s2_call_count, (void *)final);
             TEST_FAIL(case_name, msg);
         }
     }
@@ -132,13 +132,14 @@ void test_arbiter_conf_degrade(void)
     airy_grad_stats_t stats;
     __builtin_memset(&stats, 0, sizeof(stats));
     err = airy_grad_coordinator_execute(coord, NULL, seed, &final, &stats);
-    if (err == AIRY_SUCCESS && stats.converged && s2mc.s2_call_count == 0 && final == NULL) {
+    if (err == AIRY_SUCCESS && stats.converged && s2mc.s2_call_count == 0 &&
+        final && final != seed) {
         TEST_PASS("low-confidence reject ignored (adopts Model C verdict)");
     } else {
         char msg[192];
         snprintf(msg, sizeof(msg),
-                 "expected converged+no-regen, got err=%d conv=%d s2=%d final=%p", (int)err,
-                 stats.converged, s2mc.s2_call_count, (void *)final);
+                 "expected converged+no-regen+deepcopy, got err=%d conv=%d s2=%d final=%p",
+                 (int)err, stats.converged, s2mc.s2_call_count, (void *)final);
         TEST_FAIL("arbiter conf degrade", msg);
     }
     if (final)

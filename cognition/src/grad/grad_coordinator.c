@@ -913,14 +913,29 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
         *out_stats = coord->stats;
 
     coord->active = 0;
-    /* Ownership contract: out_plan=NULL when the seed was not modified
-     * (caller keeps the seed); only CONVERGED coordinator-owned plans are
-     * emitted as OWNER. A non-converged owned plan is discarded here
+    /* Ownership contract (G53, 0.1.20): SUCCESS implies *out_plan != NULL.
+     * A converged coordinator-owned plan is emitted as OWNER; a converged
+     * untouched seed (first-round pass, never BORROWed out) is emitted as
+     * a deep copy so callers face a single success shape and can never
+     * alias the seed. A non-converged owned plan is discarded here
      * (fail-closed): an unverified plan must never escape the critique
-     * gate — the caller sees AIRY_ETIMEDOUT + out_plan=NULL and must
+     * gate — the caller sees a non-SUCCESS code + out_plan=NULL and must
      * route to manual review instead of executing the seed. */
     if (plan_owned && coord->stats.converged) {
         *out_plan = plan;
+    } else if (coord->stats.converged && seed_plan) {
+        airy_err_t cl_err = airy_task_plan_clone(seed_plan, out_plan);
+        if (cl_err != AIRY_SUCCESS) {
+            /* Clone failure must not report SUCCESS with a NULL plan —
+             * degrade to ENOMEM (manual review path) instead. Stats are
+             * re-synced: the earlier snapshot still said converged. */
+            AIRY_LOG_ERROR("GRAD: seed pass-through clone failed (err=%d)", (int)cl_err);
+            coord->stats.converged = 0;
+            if (out_stats)
+                *out_stats = coord->stats;
+            *out_plan = NULL;
+            return cl_err;
+        }
     } else {
         if (plan_owned) {
             AIRY_LOG_WARN("GRAD: owned plan not converged, discarded (no plan emitted)");

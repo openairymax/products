@@ -10,9 +10,11 @@
  * §267 自 atoms/coreloopthree 迁出）。降级检测（fallback_ 前缀空壳计划）
  * 上收策略侧——机制核不再感知策略字符串约定。
  *
- * 结果契约（grad.h 三分支）：SUCCESS + final_plan → 采纳；SUCCESS +
- * final_plan=NULL → seed 首轮过门；其他错误码（含降级 AIRY_EFAIL）→
- * fail-closed，final_plan 必 NULL，调用方转人工评审。
+ * 结果契约（grad.h 三分支，G53/0.1.20 收口为单一成功形态）：SUCCESS +
+ * final_plan → 采纳（seed 首轮过门时 final_plan 为 seed 的深拷贝，
+ * 由协调器传出）；其他错误码（含降级 AIRY_EFAIL）→ fail-closed，
+ * final_plan 必 NULL，调用方转人工评审。SUCCESS + final_plan=NULL 是
+ * 契约违约，防御性 fail-closed，绝不放行未验证计划。
  */
 
 #include "grad_internal.h"
@@ -133,6 +135,15 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
         }
         out_outcome->final_plan = grad_final;
         return AIRY_SUCCESS;
+    }
+    /* G53（0.1.20）：SUCCESS 必伴随 final_plan（协调器对 seed 过门场景
+     * 传出深拷贝）。此分支是契约违约的防御性 fail-closed：无产物的
+     * "成功"意味着批判门没有真正把过关，绝不允许静默放行 seed。 */
+    if (grad_err == AIRY_SUCCESS && !grad_final) {
+        AIRY_LOG_ERROR("GRAD: contract violation (SUCCESS without final_plan) "
+                       "— fail-closed, manual review required");
+        out_outcome->degraded = 1;
+        return AIRY_EFAIL;
     }
     if (grad_final) {
         /* Fail-closed：协调器未收敛时已丢弃 owned 计划（返回 NULL），

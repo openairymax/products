@@ -3,7 +3,8 @@
 
 /*
  * test_grad_coordinator.c
- *   GRAD 协调器测试域：seed 计划收敛、四验被拒后模型 A 再生成收敛、
+ *   GRAD 协调器测试域：seed 计划收敛（G53：过门 seed 以深拷贝传出，
+ *   SUCCESS 必有 final_plan）、四验被拒后模型 A 再生成收敛、
  *   未收敛 fail-closed（owned 计划丢弃 + AIRY_ETIMEDOUT）。
  */
 
@@ -45,16 +46,23 @@ void test_coordinator_seed_converge(void)
     airy_grad_stats_t stats;
     __builtin_memset(&stats, 0, sizeof(stats));
     err = airy_grad_coordinator_execute(coord, NULL, seed, &final, &stats);
-    if (err == AIRY_SUCCESS && stats.converged && final == NULL && mc.s2_call_count == 0) {
-        TEST_PASS("seed converges without regeneration");
+    /* G53：seed 首轮过门不再以 NULL 表示"未修改"，协调器传出深拷贝
+     * （OWNER），调用方与 seed 无别名；S2 不应被调用。 */
+    if (err == AIRY_SUCCESS && stats.converged && final && final != seed &&
+        mc.s2_call_count == 0 && final->task_plan_node_count == 1 &&
+        final->task_plan_nodes[0]->task_node_id &&
+        strcmp(final->task_plan_nodes[0]->task_node_id, "S_01") == 0) {
+        TEST_PASS("seed converges, deep-copied without regeneration");
     } else {
-        char msg[160];
+        char msg[192];
         snprintf(msg, sizeof(msg),
-                 "expected converged+NULL+no-s2, got err=%d conv=%d s2=%d final=%p", (int)err,
-                 stats.converged, mc.s2_call_count, (void *) final);
+                 "expected converged+deepcopy+no-s2, got err=%d conv=%d s2=%d final=%p",
+                 (int)err, stats.converged, mc.s2_call_count, (void *) final);
         TEST_FAIL("seed converge", msg);
     }
     airy_grad_coordinator_destroy(coord);
+    if (final)
+        free_plan(final);
     free_plan(seed);
 }
 
