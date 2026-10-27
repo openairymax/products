@@ -85,6 +85,7 @@ static const airy_mc_ops_t g_mc_payload_ops = {
     .detect = airy_mc_detect_patterns,
     .adapt = airy_mc_adapt_threshold,
     .set_thresh = mc_set_thresh,
+    .stats = airy_mc_stats,
 };
 
 static const airy_intent_ops_t g_intent_payload_ops = {
