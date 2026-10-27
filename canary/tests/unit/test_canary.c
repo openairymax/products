@@ -135,9 +135,10 @@ static void test_propose_admit_gates(void)
     canary_free(c);
 
     CHECK(canary_admit(150, 200) == 0);
-    CHECK(canary_admit(151, 200) == -1);
+    CHECK(canary_admit(151, 200) == -1); /* 新增函数 151 行 */
     CHECK(canary_admit(150, 201) == -1);
-    CHECK(canary_admit(0, 200) == -1);
+    CHECK(canary_admit(0, 200) == 0); /* 纯修改补丁：零新函数合法 */
+    CHECK(canary_admit(0, 201) == -1); /* 纯修改 201 行 */
 
     g = (canary_gates_t){0};
     g.ok_pm = 9990;
