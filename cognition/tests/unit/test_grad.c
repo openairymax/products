@@ -246,6 +246,7 @@ int main(void)
     RUN_TEST(test_c13_policy_off);
     RUN_TEST(test_c13_budget_skip);
     RUN_TEST(test_c13_j16_stop);
+    RUN_TEST(test_c13_s1_failclosed);
     RUN_TEST(test_c13_golden);
     RUN_TEST(test_ctxb_est);
     RUN_TEST(test_ctxb_resolve_off);

@@ -473,13 +473,16 @@ if(BUILD_TESTS)
 
     # GRAD 计划级批判环策略载荷测试：协调器/验证器/工作区/S2 计划/B 仲裁/
     # 运行闭环等被测符号全部位于本库（含 grad_run）；计划数据模型
-    # （airy_task_plan_free/airy_plan_parse，plan_model.c）在 embedded 由
-    # airy_cognition 目标提供，standalone 直编其实现单元（零机制依赖，
-    # 镜像 COG_GCCP_TEST_SRCS 范式）；cJSON 依赖镜像 test_cog_review_strategy。
+    # （airy_task_plan_free/airy_plan_parse，plan_model.c）与 GCCP 目标
+    # 序列化（airy_gccp_goal_to_json，gccp_goal.c——grad_llm_s2_plan 的
+    # grad_goal_to_json 消费面）在 embedded 由 airy_cognition 目标提供，
+    # standalone 直编其实现单元（零机制依赖，镜像 COG_GCCP_TEST_SRCS
+    # 范式）；cJSON 依赖镜像 test_cog_review_strategy。
     set(COG_GRAD_TEST_SRCS "")
     if(NOT TARGET airy_cognition)
         set(COG_GRAD_TEST_SRCS
-            "${COG_CONTRACT_DIR}/../src/cognition/think/plan_model.c")
+            "${COG_CONTRACT_DIR}/../src/cognition/think/plan_model.c"
+            "${COG_CONTRACT_DIR}/../src/cognition/gccp/gccp_goal.c")
     endif()
     add_executable(test_grad_strategy tests/unit/test_grad.c
         tests/unit/test_grad_verifiers.c

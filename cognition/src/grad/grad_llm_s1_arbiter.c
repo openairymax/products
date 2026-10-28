@@ -632,8 +632,11 @@ airy_err_t grad_llm_s1_failure(const grad_arb_fail_in_t *in, char **out_verdict,
             AIRY_LOG_WARN("GRAD-B: failure prompt over budget, neighbours/history dropped");
     }
     if (!prompt) {
+        /* C7 R4：装配 OOM 显式上报（P1-11：与主路径同语义，B 故障
+         * 在事件流不可静默——协调器计 arbiter_internal_error 并发
+         * grad_arbiter_failure_error 事件，C patch 回退语义不变）。 */
         AIRY_LOG_WARN("GRAD-B: failure prompt assembly failed (OOM), deferring to Model C");
-        return AIRY_SUCCESS;
+        return AIRY_ENOMEM;
     }
 
     char *verdict = NULL;
@@ -644,9 +647,11 @@ airy_err_t grad_llm_s1_failure(const grad_arb_fail_in_t *in, char **out_verdict,
     AIRY_FREE(prompt);
 
     if (err != AIRY_SUCCESS || !verdict) {
+        /* C7 R4：服务故障/空裁决显式上报（P1-11：fail-open 已收口，
+         * 错误码透传与主路径 L495 同语义，B 未参与可归因可判读）。 */
         AIRY_LOG_WARN("GRAD-B: failure arbitration LLM unavailable (err=%d), C patch kept",
                       (int)err);
-        return AIRY_SUCCESS;
+        return err != AIRY_SUCCESS ? err : AIRY_ESERVICE;
     }
 
     if (ctx->workspace_root && ctx->plan_id) {

@@ -11,6 +11,8 @@
  *   ③ salvageable=true 但 scope 空 → patch_invalid 回退全量重绘；
  *   ④ arbiter_on_failure=off → B 零调用；
  *   ⑤ 失败路径预算不足 → 跳过仲裁（arbiter_skipped_budget）；
+ *   P1-11 反向用例：LLM 不可用（complete=NULL）→ 真实 s1_failure 与
+ *   主路径 s1_arbiter 均 fail-closed 显式上报，verdict 不外泄；
  *   J-16 连续两轮缺陷码与范围相同 → 无进展 fail-closed 停止；
  *   黄金集（tests/grad/golden）：wanted 15 例 + parse 17 例，假阳性率 ≤5%。
  */
@@ -388,6 +390,50 @@ void test_c13_j16_stop(void)
     TEST_CHECK(rig.final == NULL, "defective plan must not leak out");
     TEST_CHECK(rig.stats.converged == 0, "must not be converged");
     TEST_PASS("J-16 stops on repeated defect code and scope");
+}
+
+/* P1-11（Gate 33 反向用例）：注入 LLM 不可用（complete=NULL）→ 真实
+ * s1_failure 与主路径 s1_arbiter 均须显式上报（非 0），B 故障不得
+ * 静默降级为豁免；错误码透传与主路径同语义，verdict 不外泄。 */
+void test_c13_s1_failclosed(void)
+{
+    grad_llm_ctx_t ctx;
+    __builtin_memset(&ctx, 0, sizeof(ctx)); /* complete=NULL → AIRY_ESERVICE */
+    const char *ep = "deploy the web service";
+    airy_gccp_goal_t goal;
+    __builtin_memset(&goal, 0, sizeof(goal));
+    goal.goal_endpoint = ep;
+
+    airy_task_plan_t *plan = c13_guard3(10);
+    TEST_CHECK(plan != NULL, "plan alloc failed");
+
+    airy_grad_report_t rep;
+    __builtin_memset(&rep, 0, sizeof(rep));
+    TEST_CHECK(airy_grad_verify_plan_g(plan, NULL, &goal, &rep) == AIRY_SUCCESS,
+               "verify must run");
+
+    grad_arb_fail_in_t fin;
+    __builtin_memset(&fin, 0, sizeof(fin));
+    fin.goal_json = "{\"goal_endpoint\":\"deploy the web service\"}";
+    fin.c_report_json = "{\"error\":0}";
+    fin.failed_node_json = "{\"task_node_id\":\"G1\"}";
+    fin.neighbors_json = "{}";
+    fin.round_history_json = "[]";
+    fin.round = 0;
+    fin.token_budget = 1024;
+
+    char *verdict = NULL;
+    airy_err_t err = grad_llm_s1_failure(&fin, &verdict, &ctx);
+    TEST_CHECK(err == AIRY_ESERVICE, "s1_failure must surface LLM unavailability");
+    TEST_CHECK(verdict == NULL, "no verdict may leak out on failure");
+
+    char *verdict2 = NULL;
+    airy_err_t err2 = grad_llm_s1_arbiter(&goal, &rep, plan, &verdict2, &ctx);
+    TEST_CHECK(err2 == AIRY_ESERVICE, "s1_arbiter must surface LLM unavailability");
+    TEST_CHECK(verdict2 == NULL, "no verdict may leak out on failure");
+
+    free_plan(plan);
+    TEST_PASS("LLM unavailable fails closed on both arbitration paths (P1-11)");
 }
 
 #ifdef AIRY_HAS_CJSON

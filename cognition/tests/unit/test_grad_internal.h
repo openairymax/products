@@ -142,6 +142,7 @@ void test_c13_patch_invalid(void);
 void test_c13_policy_off(void);
 void test_c13_budget_skip(void);
 void test_c13_j16_stop(void);
+void test_c13_s1_failclosed(void);
 void test_c13_golden(void);
 
 /* GRAD 上下文预算域（test_grad_c12.c，0.1.20 C12 / §5.2b.9） */
