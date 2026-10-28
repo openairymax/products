@@ -439,3 +439,45 @@ void test_e04_guard_drift(void)
     }
     free_plan(nogoal);
 }
+
+/* Gate 32：位图 → 单值裁决的优先级梯。梯序为 E-02 > E-05 > E-01 >
+ * E-03 > E-04，故任意两位同置时，下标较小者胜。10 组两两冲突 +
+ * 5 个单位 + 全位置位 + 零位，全部由同一个纯函数判定。 */
+void test_err_priority(void)
+{
+    const airy_grad_error_t order[] = {AIRY_GRAD_E02_DEADLOCK, AIRY_GRAD_E05_VERIFY_INSUFFICIENT,
+                                       AIRY_GRAD_E01_CAUSAL_BREAK, AIRY_GRAD_E03_RESOURCE_OVER,
+                                       AIRY_GRAD_E04_GUARD_DRIFT};
+    const char *names[] = {"E-02", "E-05", "E-01", "E-03", "E-04"};
+    char msg[192];
+    int bad = 0;
+    uint32_t all = 0;
+
+    for (int i = 0; i < 5; i++) {
+        all |= AIRY_GRAD_ERR_BIT(order[i]);
+        if (grad_err_rank(AIRY_GRAD_ERR_BIT(order[i])) != order[i]) {
+            snprintf(msg, sizeof(msg), "single %s lost", names[i]);
+            bad++;
+        }
+        for (int j = i + 1; j < 5; j++) {
+            uint32_t pair = AIRY_GRAD_ERR_BIT(order[i]) | AIRY_GRAD_ERR_BIT(order[j]);
+            if (grad_err_rank(pair) != order[i]) {
+                snprintf(msg, sizeof(msg), "%s vs %s: lower rank won", names[i], names[j]);
+                bad++;
+            }
+        }
+    }
+    if (grad_err_rank(all) != AIRY_GRAD_E02_DEADLOCK) {
+        snprintf(msg, sizeof(msg), "all-five: top of ladder not returned");
+        bad++;
+    }
+    if (grad_err_rank(0) != AIRY_GRAD_OK) {
+        snprintf(msg, sizeof(msg), "empty bitmap: expected OK");
+        bad++;
+    }
+
+    if (bad == 0)
+        TEST_PASS("priority ladder E-02 > E-05 > E-01 > E-03 > E-04 (10 pairs + edges)");
+    else
+        TEST_FAIL("err priority ladder", msg);
+}

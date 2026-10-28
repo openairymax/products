@@ -693,6 +693,21 @@ static void grad_check_guard(const airy_task_plan_t *plan, const airy_gccp_goal_
     report->guard_state = fail ? AIRY_GRAD_GUARD_FAIL : AIRY_GRAD_GUARD_PASS;
 }
 
+airy_grad_error_t grad_err_rank(uint32_t errors)
+{
+    if (errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E02_DEADLOCK))
+        return AIRY_GRAD_E02_DEADLOCK;
+    if (errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E05_VERIFY_INSUFFICIENT))
+        return AIRY_GRAD_E05_VERIFY_INSUFFICIENT;
+    if (errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E01_CAUSAL_BREAK))
+        return AIRY_GRAD_E01_CAUSAL_BREAK;
+    if (errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E03_RESOURCE_OVER))
+        return AIRY_GRAD_E03_RESOURCE_OVER;
+    if (errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E04_GUARD_DRIFT))
+        return AIRY_GRAD_E04_GUARD_DRIFT;
+    return AIRY_GRAD_OK;
+}
+
 /**
  * @brief Shared verification pipeline (full or scope, with optional goal).
  *
@@ -776,18 +791,7 @@ static airy_err_t grad_verify_impl(const airy_task_plan_t *plan, const airy_grad
     if (closure)
         AIRY_FREE(closure);
 
-    if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E02_DEADLOCK))
-        report->error = AIRY_GRAD_E02_DEADLOCK;
-    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E05_VERIFY_INSUFFICIENT))
-        report->error = AIRY_GRAD_E05_VERIFY_INSUFFICIENT;
-    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E01_CAUSAL_BREAK))
-        report->error = AIRY_GRAD_E01_CAUSAL_BREAK;
-    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E03_RESOURCE_OVER))
-        report->error = AIRY_GRAD_E03_RESOURCE_OVER;
-    else if (report->errors & AIRY_GRAD_ERR_BIT(AIRY_GRAD_E04_GUARD_DRIFT))
-        report->error = AIRY_GRAD_E04_GUARD_DRIFT;
-    else
-        report->error = AIRY_GRAD_OK;
+    report->error = grad_err_rank(report->errors);
 
     return AIRY_SUCCESS;
 }

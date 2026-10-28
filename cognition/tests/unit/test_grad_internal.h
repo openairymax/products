@@ -97,6 +97,7 @@ void test_e03_resource(void);
 void test_verify_scope(void);
 void test_e05_verify_insufficient(void);
 void test_e04_guard_drift(void);
+void test_err_priority(void);
 void test_coordinator_seed_converge(void);
 void test_coordinator_reject_regenerate(void);
 void test_coordinator_failclosed_nonconverged(void);
