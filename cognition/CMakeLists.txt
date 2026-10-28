@@ -99,6 +99,17 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
     set(COG_CONTRACT_DIR "${AGENTRT_ROOT}/atoms/coreloopthree/include")
     set(AIRY_COREKERN_INCLUDE_DIR "${AGENTRT_ROOT}/atoms/corekern/include")
     set(COG_MEMORY_INCLUDE_DIR "${AGENTRT_ROOT}/atoms/memory/include")
+
+    # heapstore 运行时存储（P1-4 批判落盘）：standalone 复用 agentrt 管理仓；
+    # BUILD_TESTS 同 commons 阻断其测试挂载（airy_compile_defs 已由
+    # airy_apply_dep_defs 幂等创建，heapstore 条件链接前提满足）。
+    # embedded 由根装配区挂载，本块跳过。
+    if(EXISTS "${AGENTRT_ROOT}/heapstore/CMakeLists.txt")
+        set(BUILD_TESTS OFF)
+        add_subdirectory("${AGENTRT_ROOT}/heapstore" heapstore)
+        unset(BUILD_TESTS)
+        set(COG_HEAPSTORE_DIR "${AGENTRT_ROOT}/heapstore")
+    endif()
 endif()
 
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -120,6 +131,9 @@ if(NOT AIRY_COREKERN_INCLUDE_DIR)
 endif()
 if(NOT COG_MEMORY_INCLUDE_DIR)
     set(COG_MEMORY_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/atoms/memory/include")
+endif()
+if(NOT COG_HEAPSTORE_DIR)
+    set(COG_HEAPSTORE_DIR "${CMAKE_SOURCE_DIR}/heapstore")
 endif()
 
 # cJSON 检测：embedded 复用根检测 CACHE（coreloopthree 提升的 AIRY_CJSON_*）；
@@ -336,6 +350,15 @@ endif()
 if(TARGET airy_coreloopthree)
     target_link_libraries(airy_cognition_strategy PRIVATE airy_coreloopthree)
 endif()
+
+# heapstore 运行时存储（P1-4 批判落盘）：机制件可缺席（模块可拔插）。
+# embedded 挂载时序在本库之后，configure 期 if(TARGET) 恒 false，故用生成
+# 期 genex（镜像根装配区范式）；COG_HAS_HEAPSTORE 门控落盘调用，缺席时
+# reflective 静默降级为内存态（非桩实现，能力格可插拔纪律）。
+target_link_libraries(airy_cognition_strategy PRIVATE
+    $<IF:$<TARGET_EXISTS:airy_heapstore>,airy_heapstore,>)
+target_compile_definitions(airy_cognition_strategy PRIVATE
+    $<IF:$<TARGET_EXISTS:airy_heapstore>,COG_HAS_HEAPSTORE=1,>)
 
 # cJSON：cog_review 汇总决策 JSON（embedded/standalone 一致）
 if(_cog_cjson_libs)
@@ -607,6 +630,17 @@ if(BUILD_TESTS)
         ${AIRY_COREKERN_INCLUDE_DIR}
     )
     target_link_libraries(test_plan_reactive PRIVATE airy_cognition_strategy)
+    # P1-4 批判落盘端到端断言：策略库对 heapstore 为 PRIVATE 链接，头面
+    # 不随链接面传递，故测试自取头目录；编译门与库同 genex（embedded 挂载
+    # 时序在本目录之后，configure 期 TARGET 不可见）。
+    if(EXISTS "${COG_HEAPSTORE_DIR}/include/heapstore_journal.h")
+        target_include_directories(test_plan_reactive PRIVATE
+            ${COG_HEAPSTORE_DIR}/include)
+        target_compile_definitions(test_plan_reactive PRIVATE
+            $<IF:$<TARGET_EXISTS:airy_heapstore>,COG_HAS_HEAPSTORE=1,>)
+        target_link_libraries(test_plan_reactive PRIVATE
+            $<IF:$<TARGET_EXISTS:airy_heapstore>,airy_heapstore,>)
+    endif()
     if(TARGET airy_coreloopthree)
         target_link_libraries(test_plan_reactive PRIVATE airy_coreloopthree)
     endif()

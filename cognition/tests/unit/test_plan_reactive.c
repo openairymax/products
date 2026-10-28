@@ -16,6 +16,8 @@
  *      返 ESERVICE 后 build_fallback_plan 兜底，plan() 最终返回
  *      AIRY_SUCCESS + 非空计划（节点>0），fallback 策略安全可用；
  *   5. NULL intent 防御：plan(NULL, ...) 返回错误码，不崩溃。
+ *   6. 批判落盘（COG_HAS_HEAPSTORE）：reflective 四相评估各写一条
+ *      journal critiques 行，落盘计数 == 4。
  */
 
 #include "cognition.h"
@@ -27,6 +29,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef COG_HAS_HEAPSTORE
+#include "heapstore.h"
+#include "heapstore_journal.h"
+#endif
 
 static int tests_run = 0;
 static int tests_failed = 0;
@@ -163,6 +170,67 @@ static void test_plan_null_intent_defense(void)
     strat->destroy(strat);
 }
 
+#ifdef COG_HAS_HEAPSTORE
+/* 批判落盘端到端：reflective 五相管线对四相评估各写一条 critiques 行。
+ * 与策略库同进程同库，落盘计数即集成证据（非空转）。测试隔离镜像
+ * heapstore journal 范式：cwd 相对根，先清 registry 库及 WAL 影子。 */
+#define CRIT_ROOT "cog_crit_test"
+#define CRIT_DB CRIT_ROOT "/registry/registry.db"
+
+static void crit_wipe(void)
+{
+    static const char *const files[] = {CRIT_DB, CRIT_DB "-wal", CRIT_DB "-shm"};
+    size_t i;
+
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); ++i)
+        (void)remove(files[i]);
+}
+
+static void test_plan_critiques_persist(void)
+{
+    const char *name = "plan_critiques_persist";
+    heapstore_config_t cfg = heapstore_def_config(CRIT_ROOT);
+    airy_plan_strategy_t *strat = NULL;
+    airy_task_plan_t *plan = NULL;
+    airy_intent_t intent;
+    uint64_t rows = 0;
+
+    crit_wipe();
+    if (heapstore_init(&cfg) != heapstore_SUCCESS ||
+        heapstore_registry_init() != heapstore_SUCCESS) {
+        FAIL(name, "heapstore boot failed");
+        heapstore_shutdown();
+        return;
+    }
+
+    strat = airy_plan_reflective_create(NULL);
+    if (!strat || !strat->plan) {
+        FAIL(name, "reflective factory failed");
+        goto out;
+    }
+
+    AIRY_MEMSET(&intent, 0, sizeof(intent));
+    intent.intent_goal = (char *)"分析这份数据并写一份报告";
+    intent.intent_goal_len = strlen(intent.intent_goal);
+    intent.intent_flags = 0x02;
+    if (strat->plan(&intent, strat->data, &plan) != AIRY_SUCCESS || !plan) {
+        FAIL(name, "reflective plan failed");
+        goto out;
+    }
+
+    if (hs_jour_count(heapstore_JOUR_CRITIQUES, &rows) != heapstore_SUCCESS || rows != 4)
+        FAIL(name, "expected 4 critique rows (decomposition/planning/audit/alignment)");
+
+out:
+    if (plan)
+        airy_task_plan_free(plan);
+    if (strat)
+        strat->destroy(strat);
+    heapstore_registry_shutdown();
+    heapstore_shutdown();
+}
+#endif
+
 int main(void)
 {
     /* 注表装配（daemon svc.c 同路径）：plan ops 注入先行，后续测试经
@@ -177,6 +245,9 @@ int main(void)
     RUN_TEST(test_plan_payload_zh_smoke);
     RUN_TEST(test_plan_reflective_no_llm_fallback);
     RUN_TEST(test_plan_null_intent_defense);
+#ifdef COG_HAS_HEAPSTORE
+    RUN_TEST(test_plan_critiques_persist);
+#endif
 
     printf("\nresults: %d/%d passed (%d failed)\n", tests_run - tests_failed, tests_run,
            tests_failed);
