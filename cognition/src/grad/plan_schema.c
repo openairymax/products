@@ -361,7 +361,13 @@ airy_err_t grad_plan_schema_validate(const cJSON *root, const char *plan_id,
     }
     for (int i = 0; i < n; i++) {
         cJSON *nd = cJSON_GetArrayItem(nodes, i);
-        if (!cJSON_IsObject(nd) || !grad_check_node(nd, err, i))
+        /* 非对象节点单独定位：若交由 grad_check_node 处理，所有字段都
+         * 「缺席」，违例会退化成无定位的整份拒绝，日志无法指认约束。 */
+        if (!cJSON_IsObject(nd)) {
+            grad_serr_set(err, i, "node", "type");
+            return AIRY_EINVAL;
+        }
+        if (!grad_check_node(nd, err, i))
             return AIRY_EINVAL;
     }
     if (!grad_struct_ok(nodes, n, err))

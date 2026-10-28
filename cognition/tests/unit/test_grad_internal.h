@@ -121,6 +121,7 @@ void test_schema_plan_id(void);
 void test_schema_node_fields(void);
 void test_schema_structure(void);
 void test_schema_inputs(void);
+void test_plan_reject(void);
 
 /* GRAD 缺省元数据推导域（test_grad_metadata.c，0.1.20 C4） */
 void test_meta_outputs_fill(void);

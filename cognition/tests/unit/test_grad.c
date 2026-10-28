@@ -229,6 +229,7 @@ int main(void)
     RUN_TEST(test_schema_node_fields);
     RUN_TEST(test_schema_structure);
     RUN_TEST(test_schema_inputs);
+    RUN_TEST(test_plan_reject);
     RUN_TEST(test_e04_guard_drift);
     RUN_TEST(test_err_priority);
     RUN_TEST(test_meta_outputs_fill);
