@@ -45,6 +45,10 @@ extern "C" {
 /* 结构界 */
 #define GRAD_MAX_NODES 32
 #define GRAD_PLAN_ID_MAX 64
+/* plan_id 缺省值：调用方未提供计划标识时的统一归一名（schema 域内合法）。
+ * 解析、校验与落盘必须共用该常量，避免"校验用 NULL / 构造用默认值"
+ * 的语义分叉。 */
+#define GRAD_PLAN_ID_DEFAULT "grad_plan"
 #define GRAD_NODE_ID_MAX 48
 #define GRAD_GOAL_MAX 512
 #define GRAD_ARTIFACT_MAX 64

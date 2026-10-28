@@ -155,9 +155,13 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
 
     /* C1：schema 校验前置——违例整份拒绝（EINVAL），不静默修复。
      * s2_plan 侧对 EINVAL 走保守 fallback（q8a 语义），修复环不中断；
-     * 缺省元数据（outputs/inputs/cost）由 C4 在构造后推导补全。 */
+     * 缺省元数据（outputs/inputs/cost）由 C4 在构造后推导补全。
+     * plan_id 缺省值必须先于校验归一：否则 schema 以 "missing" 拒绝整份
+     * 计划，下方的缺省构造形同虚设，launch 未带 plan_id 的合法计划会被
+     * 系统性地降级为 fallback 空壳（终态 fail-closed）。 */
+    const char *eff_id = plan_id ? plan_id : GRAD_PLAN_ID_DEFAULT;
     grad_schema_err_t serr;
-    if (grad_plan_schema_validate(root, plan_id, &serr) != AIRY_SUCCESS) {
+    if (grad_plan_schema_validate(root, eff_id, &serr) != AIRY_SUCCESS) {
         AIRY_LOG_WARN("GRAD-A: plan schema violation (node=%d field=%s reason=%s)",
                       serr.index, serr.field, serr.reason);
         cJSON_Delete(root);
@@ -180,7 +184,7 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
         cJSON_Delete(root);
         return AIRY_ENOMEM;
     }
-    plan->task_plan_id = plan_id ? AIRY_STRDUP(plan_id) : AIRY_STRDUP("grad_plan");
+    plan->task_plan_id = AIRY_STRDUP(eff_id);
     plan->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(n, sizeof(airy_task_node_t *));
     if (!plan->task_plan_nodes) {
         AIRY_FREE(plan->task_plan_id);
