@@ -7,7 +7,8 @@
  * 覆盖：SHA-256 FIPS 180-4 已知向量；C0 提案爆炸半径边界；
  * G30 准入；K1-K6 门禁；五态机全序推进与 C2 灰度阶梯（≥2h 驻留）；
  * C3 采纳与 .prev 保留链；C4 回滚恢复；base 哈希失配 → 待重放；
- * kill switch 三通道（环境变量 / 文件哨兵 / CLI 持久化）；路由计数。
+ * kill switch 四通道（环境变量 / 全局文件 / 实例哨兵 / CLI 持久化）
+ * 各自独立置位与解除用例，env 通道含 fork 跨进程传播验证；路由计数。
  */
 #include "canary.h"
 #include "canary_sha256.h"
@@ -27,6 +28,7 @@
 #define UT_UNSETENV(k) _putenv_s(k, "")
 #else
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #define UT_GETPID getpid
 #define UT_UNLINK remove
@@ -348,26 +350,49 @@ static void test_killswitch(const char *root)
     canary_t *c = NULL;
     canary_t *d = NULL;
     char path[512];
+    char sentry[512];
 
     canary_ks_env("");
     canary_ks_file("");
+    snprintf(sentry, sizeof(sentry), "%s/local/evolve/ut/kill", root);
 
     CHECK(canary_new(&c, root, "ut") == 0);
     CHECK(canary_ks_hit(c, 1000) == 0);
     CHECK(canary_route(c, 0) == 0); /* NONE 态不引流 */
 
-    /* 通道一：环境变量 */
+    /* 通道一：环境变量（置位命中 → fork 跨进程传播 → 撤除 TTL 解除） */
     UT_SETENV("CANARY_UT_KILL", "1");
     canary_ks_env("CANARY_UT_KILL");
     CHECK(canary_ks_hit(c, 5000) == 1);
     CHECK(canary_route(c, 0) == 0); /* kill 命中即断流 */
+#ifndef _WIN32
+    {
+        pid_t pid = fork();
+
+        if (pid == 0) {
+            canary_t *s = NULL;
+            int ok = canary_new(&s, root, "ut") == 0 &&
+                     canary_ks_hit(s, 5000) == 1;
+
+            canary_free(s);
+            _exit(ok ? 0 : 1);
+        }
+        if (pid > 0) {
+            int st = -1;
+
+            CHECK(waitpid(pid, &st, 0) == pid);
+            CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+        }
+    }
+#endif
     UT_UNSETENV("CANARY_UT_KILL");
     CHECK(canary_ks_hit(c, 9000) == 0); /* TTL 过后解除 */
+    canary_ks_env("");
 
-    /* 通道二：全局哨兵文件 */
+    /* 通道二：全局文件（外部创建命中 → 跨实例可见 → 删除解除） */
     snprintf(path, sizeof(path), "%s/global-sentry", root);
     canary_ks_file(path);
-    CHECK(canary_ks_hit(c, 20000) == 0);
+    CHECK(canary_ks_hit(c, 13000) == 0);
     {
         FILE *f = fopen(path, "wb");
 
@@ -375,18 +400,51 @@ static void test_killswitch(const char *root)
         fputs("x", f);
         fclose(f);
     }
-    CHECK(canary_ks_hit(c, 30000) == 1);
+    CHECK(canary_ks_hit(c, 17000) == 1);
+    CHECK(canary_new(&d, root, "ut") == 0);
+    CHECK(canary_ks_hit(d, 17000) == 1); /* 文件信号跨实例可见 */
+    canary_free(d);
+    d = NULL;
     UT_UNLINK(path);
     canary_ks_file("");
+    CHECK(canary_ks_hit(c, 21000) == 0);
 
-    /* 通道三：CLI 持久化（新实例重启后仍命中） */
-    CHECK(canary_ks_cli(c) == 0);
-    CHECK(canary_ks_hit(c, 40000) == 1);
+    /* 通道三：实例哨兵（不经 CLI 直接落盘 → 跨实例 → 删除解除） */
+    snprintf(path, sizeof(path), "%s/local", root);
+    UT_MKDIR(path);
+    snprintf(path, sizeof(path), "%s/local/evolve", root);
+    UT_MKDIR(path);
+    snprintf(path, sizeof(path), "%s/local/evolve/ut", root);
+    UT_MKDIR(path);
+    {
+        FILE *f = fopen(sentry, "wb");
+
+        CHECK(f != NULL);
+        if (f) {
+            fputs("kill", f);
+            fclose(f);
+        }
+    }
+    CHECK(canary_ks_hit(c, 25000) == 1);
     CHECK(canary_new(&d, root, "ut") == 0);
-    CHECK(canary_ks_hit(d, 40000) == 1); /* 哨兵跨实例生效 */
+    CHECK(canary_ks_hit(d, 25000) == 1); /* 哨兵跨实例生效 */
+    canary_free(d);
+    d = NULL;
+    UT_UNLINK(sentry);
+    CHECK(canary_ks_hit(c, 29000) == 0); /* TTL 过后解除 */
+
+    /* 通道四：CLI 持久化（写入命中 → 删除解除 → 再置位跨实例） */
+    CHECK(canary_ks_cli(c) == 0);
+    CHECK(canary_ks_hit(c, 33000) == 1);
+    UT_UNLINK(sentry);
+    CHECK(canary_ks_hit(c, 37000) == 0); /* 删除哨兵后 TTL 解除 */
+    CHECK(canary_ks_cli(c) == 0);
+    CHECK(canary_new(&d, root, "ut") == 0);
+    CHECK(canary_ks_hit(d, 41000) == 1); /* 持久化跨实例（重启语义） */
     canary_free(d);
     canary_free(c);
     canary_ks_env("");
+    canary_ks_file("");
 }
 
 /* 真实时钟锚定回归：to_canary 以宿主传入时钟为驻留零点，
