@@ -623,6 +623,22 @@ airy_err_t grad_verdict_parse(const char *json, const airy_task_plan_t *plan,
  */
 void grad_verdict_free(grad_verdict_t *v);
 
+/**
+ * @brief 依唯一规范形写出裁决 JSON（审计与往返比对）。
+ *
+ * 字段序固定 verdict/confidence/e04/opinion/defects[]/affected_scope[]；
+ * 空 opinion 与空数组不落键。对 grad_verdict_parse 的输出往返任意次，
+ * 结果字节级一致（Gate 33）。
+ *
+ * @param v [in] 待写出裁决（non-NULL, BORROW）
+ * @param out_json [out] 紧凑 JSON（non-NULL, OUT；失败时为 NULL）
+ * @return AIRY_SUCCESS / AIRY_EINVAL / AIRY_ENOMEM / AIRY_ESERVICE（无 cJSON）
+ *
+ * @ownership out_json: OWNER（调用方 AIRY_FREE）
+ * @threadsafe yes（无共享状态）
+ */
+airy_err_t grad_verdict_to_json(const grad_verdict_t *v, char **out_json);
+
 /* grad_verdict.c — C13 失败路径仲裁契约（§5.2b.11） */
 
 /** @brief C 失败后 B 的定向裁决（OWNER 语义同 grad_verdict_t）。 */

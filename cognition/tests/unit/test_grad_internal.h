@@ -130,6 +130,7 @@ void test_meta_explicit_kept(void);
 /* GRAD 增量修补域（test_grad_patch.c，0.1.20 C6 / §5.2b.3） */
 void test_verdict_contract_valid(void);
 void test_verdict_contract_invalid(void);
+void test_verdict_roundtrip(void);
 void test_patch_scope_bounds(void);
 void test_patch_build_incremental(void);
 void test_patch_full(void);

@@ -399,3 +399,107 @@ void test_plan_merge_scope(void)
     free_plan(p);
     TEST_PASS("plan merge scope/frozen/entry semantics");
 }
+
+/* ==================== 裁决写出往返（Gate 33） ==================== */
+
+static int vd_same(const grad_verdict_t *a, const grad_verdict_t *b)
+{
+    if (a->kind != b->kind || a->e04 != b->e04 || a->confidence != b->confidence ||
+        strcmp(a->opinion, b->opinion) != 0 || a->defect_count != b->defect_count ||
+        a->scope_count != b->scope_count)
+        return 0;
+    for (size_t i = 0; i < a->defect_count; i++) {
+        if (strcmp(a->defects[i].node_id, b->defects[i].node_id) != 0 ||
+            strcmp(a->defects[i].code, b->defects[i].code) != 0 ||
+            strcmp(a->defects[i].evidence, b->defects[i].evidence) != 0 ||
+            strcmp(a->defects[i].suggestion, b->defects[i].suggestion) != 0)
+            return 0;
+    }
+    for (size_t i = 0; i < a->scope_count; i++) {
+        if (strcmp(a->scope[i], b->scope[i]) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+/* 单语料 100 次 parse→emit：每次输出必须与首轮规范形逐字节相同。 */
+static void vd_rt_one(const airy_task_plan_t *plan, const char *src, const char *tag)
+{
+    grad_verdict_t base;
+    TEST_CHECK(grad_verdict_parse(src, plan, &base) == AIRY_SUCCESS, tag);
+
+    char *canon = NULL;
+    if (grad_verdict_to_json(&base, &canon) != AIRY_SUCCESS || !canon) {
+        grad_verdict_free(&base);
+        TEST_FAIL(__func__, "canonical emit failed");
+        return;
+    }
+    char *cur = AIRY_STRDUP(canon);
+    if (!cur) {
+        AIRY_FREE(canon);
+        grad_verdict_free(&base);
+        TEST_FAIL(__func__, "dup failed");
+        return;
+    }
+
+    for (int i = 0; i < 100; i++) {
+        grad_verdict_t v;
+        if (grad_verdict_parse(cur, plan, &v) != AIRY_SUCCESS) {
+            AIRY_FREE(cur);
+            AIRY_FREE(canon);
+            grad_verdict_free(&base);
+            TEST_FAIL(__func__, "roundtrip parse failed");
+            return;
+        }
+        char *next = NULL;
+        int ok = grad_verdict_to_json(&v, &next) == AIRY_SUCCESS && next &&
+                 strcmp(next, canon) == 0 && vd_same(&v, &base);
+        grad_verdict_free(&v);
+        AIRY_FREE(cur);
+        cur = next;
+        if (!ok) {
+            AIRY_FREE(cur);
+            AIRY_FREE(canon);
+            grad_verdict_free(&base);
+            TEST_FAIL(__func__, "roundtrip bytes drifted");
+            return;
+        }
+    }
+    AIRY_FREE(cur);
+    AIRY_FREE(canon);
+    grad_verdict_free(&base);
+    TEST_PASS(tag);
+}
+
+void test_verdict_roundtrip(void)
+{
+    airy_task_plan_t *p = mk_chain8();
+    TEST_CHECK(p != NULL, "plan alloc failed");
+
+    vd_rt_one(p, "{\"verdict\":\"reject\",\"confidence\":0.8,\"e04\":\"fail\","
+                 "\"defects\":[{\"node_id\":\"B\",\"code\":\"SEM\","
+                 "\"evidence\":\"output drifts from goal\","
+                 "\"suggestion\":\"realign B with goal\"},"
+                 "{\"node_id\":\"C\",\"code\":\"E-01\"}],"
+                 "\"affected_scope\":[\"B\",\"A\",\"B\",\"GHOST\"],"
+                 "\"opinion\":\"redo B\"}",
+             "roundtrip full payload");
+
+    vd_rt_one(p, "{\"verdict\":\"accept\",\"confidence\":1}", "roundtrip minimal accept");
+
+    vd_rt_one(p, "{\"verdict\":\"reject\",\"confidence\":\"0.25\",\"e04\":\"pass\","
+                 "\"defects\":[{\"node_id\":\"H\",\"code\":\"E-03\"}]}",
+             "roundtrip numeric string");
+
+    /* 写出侧入参校验：NULL 与无 cJSON 构建之外的非法入参不得产出伪 JSON */
+    char *out = (char *)"sentinel";
+    TEST_CHECK(grad_verdict_to_json(NULL, &out) == AIRY_EINVAL && out == NULL,
+               "NULL verdict must be EINVAL");
+    grad_verdict_t empty;
+    AIRY_MEMSET(&empty, 0, sizeof(empty));
+    empty.confidence = 0.5;
+    TEST_CHECK(grad_verdict_to_json(&empty, NULL) == AIRY_EINVAL, "NULL out must be EINVAL");
+
+    free_plan(p);
+    TEST_PASS("verdict emit ownership and argument guards");
+}

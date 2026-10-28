@@ -25,6 +25,11 @@
  * 丢弃溢出条目并 WARN）；affected_scope[] 上限为计划节点数。字段长度
  * 超出定长缓冲一律视为契约违例（node_id 尤其不能截断——截断后无法
  * 与计划节点对应，C6 修补会落到错误节点）。
+ *
+ * 写出侧 grad_verdict_to_json 与解析严格对称，取唯一规范形：字段序
+ * 固定为 verdict/confidence/e04/opinion/defects[]/affected_scope[]，
+ * 空 opinion、空数组不落键。同一裁决任意次往返必须字节级一致，审计
+ * 日志因此可比对（Gate 33）。
  */
 
 #include "grad_internal.h"
@@ -330,6 +335,103 @@ airy_err_t grad_verdict_parse(const char *json, const airy_task_plan_t *plan,
     /* 无 cJSON：契约解析不可用，按服务缺失降级（调用方采纳 C 判定），
      * 不做"永远 accept"之类的伪解析。 */
     AIRY_LOG_WARN("GRAD-B: verdict contract requires cJSON, deferring to Model C");
+    return AIRY_ESERVICE;
+#endif
+}
+
+#ifdef AIRY_HAS_CJSON
+
+static const char *vd_kind_str(grad_vd_kind_t kind)
+{
+    return kind == GRAD_VD_REJECT ? "reject" : "accept";
+}
+
+static const char *vd_e04_str(grad_e04_t e04)
+{
+    switch (e04) {
+    case GRAD_E04_PASS:
+        return "pass";
+    case GRAD_E04_FAIL:
+        return "fail";
+    default:
+        return "unknown";
+    }
+}
+
+/** @brief 单条缺陷写出：node_id/code 恒在，证据与建议为空则省键。 */
+static airy_err_t vd_defect_json(const grad_defect_t *d, cJSON **out_item)
+{
+    cJSON *item = cJSON_CreateObject();
+    if (!item)
+        return AIRY_ENOMEM;
+    if (!cJSON_AddStringToObject(item, "node_id", d->node_id) ||
+        !cJSON_AddStringToObject(item, "code", d->code) ||
+        (d->evidence[0] && !cJSON_AddStringToObject(item, "evidence", d->evidence)) ||
+        (d->suggestion[0] && !cJSON_AddStringToObject(item, "suggestion", d->suggestion))) {
+        cJSON_Delete(item);
+        return AIRY_ENOMEM;
+    }
+    *out_item = item;
+    return AIRY_SUCCESS;
+}
+
+#endif /* AIRY_HAS_CJSON */
+
+airy_err_t grad_verdict_to_json(const grad_verdict_t *v, char **out_json)
+{
+    if (!out_json)
+        return AIRY_EINVAL;
+    *out_json = NULL;
+    if (!v)
+        return AIRY_EINVAL;
+
+#ifdef AIRY_HAS_CJSON
+    cJSON *root = cJSON_CreateObject();
+    if (!root)
+        return AIRY_ENOMEM;
+
+    airy_err_t err = AIRY_SUCCESS;
+    if (!cJSON_AddStringToObject(root, "verdict", vd_kind_str(v->kind)) ||
+        !cJSON_AddNumberToObject(root, "confidence", v->confidence) ||
+        !cJSON_AddStringToObject(root, "e04", vd_e04_str(v->e04)))
+        err = AIRY_ENOMEM;
+    if (err == AIRY_SUCCESS && v->opinion[0] &&
+        !cJSON_AddStringToObject(root, "opinion", v->opinion))
+        err = AIRY_ENOMEM;
+
+    if (err == AIRY_SUCCESS && v->defect_count > 0) {
+        cJSON *arr = cJSON_AddArrayToObject(root, "defects");
+        if (!arr)
+            err = AIRY_ENOMEM;
+        for (size_t i = 0; err == AIRY_SUCCESS && i < v->defect_count; i++) {
+            cJSON *item = NULL;
+            err = vd_defect_json(&v->defects[i], &item);
+            if (err == AIRY_SUCCESS)
+                cJSON_AddItemToArray(arr, item);
+        }
+    }
+
+    if (err == AIRY_SUCCESS && v->scope_count > 0) {
+        cJSON *arr = cJSON_AddArrayToObject(root, "affected_scope");
+        if (!arr)
+            err = AIRY_ENOMEM;
+        for (size_t i = 0; err == AIRY_SUCCESS && i < v->scope_count; i++) {
+            if (!v->scope[i] || !cJSON_AddItemToArray(arr, cJSON_CreateString(v->scope[i])))
+                err = AIRY_ENOMEM;
+        }
+    }
+
+    char *json = err == AIRY_SUCCESS ? cJSON_PrintUnformatted(root) : NULL;
+    cJSON_Delete(root);
+    if (!json)
+        return err == AIRY_SUCCESS ? AIRY_ENOMEM : err;
+    *out_json = json;
+    return AIRY_SUCCESS;
+#else
+    /* 与解析侧同一取舍：无 cJSON 时裁决契约整体不可用，宁可报服务
+     * 缺失也不产出无法再解析的近似 JSON（审计链要求可往返）。 */
+    (void)v;
+    AIRY_LOG_WARN("GRAD-B: verdict serialization requires cJSON");
     return AIRY_ESERVICE;
 #endif
 }
