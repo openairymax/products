@@ -150,6 +150,11 @@ void test_schema_structure(void)
                           "\"entry\":[\"Z\"]}",
                           "p", &err) == AIRY_EINVAL && strcmp(err.reason, "missing_ref") == 0,
                "dangling entry rejected");
+    /* 非对象节点：拒绝之外必须给出定位，否则日志无法指认是哪一条 */
+    TEST_CHECK(schema_try("{\"nodes\":[\"x\"]}", "p", &err) == AIRY_EINVAL &&
+                   err.index == 0 && strcmp(err.field, "node") == 0 &&
+                   strcmp(err.reason, "type") == 0,
+               "non-object node rejected with location");
     TEST_PASS("structure constraints enforced");
 }
 
@@ -194,6 +199,61 @@ void test_schema_inputs(void)
     TEST_PASS("inputs closure semantics enforced");
 }
 
+typedef struct {
+    const char *reason;
+    const char *field;
+    const char *plan_id;
+    const char *json;
+} bad_plan_t;
+
+/* 12 类拒绝原因码，每码一份最小反例。拒而不定位与拒绝本身同样有害：运维
+ * 只能看到「计划被拒」，日志里没有可指认的约束。故逐类断言 field + reason
+ * 双定位，只断言返回码会把「语义拒绝」与「解析失败」混为一谈。 */
+void test_plan_reject(void)
+{
+    static const bad_plan_t cases[] = {
+        {"type", "root", "p", "[]"},
+        {"missing", "plan_id", NULL,
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\"}]}"},
+        {"pattern", "plan_id", "bad id!",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\"}]}"},
+        {"range", "nodes", "p", "{\"nodes\":[]}"},
+        {"enum", "role", "p",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"creator\"}]}"},
+        {"dup", "id", "p",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\"},"
+         "{\"id\":\"A\",\"goal\":\"h\",\"role\":\"act\"}]}"},
+        {"missing_dep", "depends", "p",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\",\"depends\":[\"X\"]}]}"},
+        {"self_dep", "depends", "p",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\",\"depends\":[\"A\"]}]}"},
+        {"format", "inputs", "p",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\",\"inputs\":[\"nodot\"]}]}"},
+        {"producer_missing", "inputs", "p",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\",\"inputs\":[\"X.o\"]}]}"},
+        {"producer_not_in_depends", "inputs", "p",
+         "{\"nodes\":[{\"id\":\"P\",\"goal\":\"p\",\"role\":\"plan\",\"outputs\":[\"po\"]},"
+         "{\"id\":\"B\",\"goal\":\"b\",\"role\":\"act\",\"inputs\":[\"P.po\"]}]}"},
+        {"missing_ref", "entry", "p",
+         "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"plan\"}],\"entry\":[\"Z\"]}"},
+    };
+    int bad = 0;
+    char msg[192];
+    for (size_t k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
+        grad_schema_err_t err;
+        airy_err_t rc = schema_try(cases[k].json, cases[k].plan_id, &err);
+        if (rc != AIRY_EINVAL || strcmp(err.field, cases[k].field) != 0 ||
+            strcmp(err.reason, cases[k].reason) != 0) {
+            snprintf(msg, sizeof(msg), "case %zu [%s] rc=%d field=%s reason=%s", k,
+                     cases[k].reason, (int)rc, err.field, err.reason);
+            TEST_FAIL(__func__, msg);
+            bad++;
+        }
+    }
+    TEST_CHECK(bad == 0, "every rejection class located by field+reason");
+    TEST_PASS("12 rejection classes located");
+}
+
 #else /* !AIRY_HAS_CJSON */
 
 void test_schema_valid_full(void)
@@ -205,5 +265,6 @@ void test_schema_plan_id(void) {}
 void test_schema_node_fields(void) {}
 void test_schema_structure(void) {}
 void test_schema_inputs(void) {}
+void test_plan_reject(void) {}
 
 #endif /* AIRY_HAS_CJSON */
