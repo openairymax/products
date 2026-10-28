@@ -154,4 +154,15 @@ void test_ctxb_char_cap(void);
 void test_ctxb_sem_gate(void);
 void test_ctxb_sem_cap_grows(void);
 
+/* GRAD 生产入口终态域（test_grad_run.c，0.1.20 P0-7 / C7 / §4.9） */
+void test_run_conv(void);
+void test_run_fix(void);
+void test_run_closed(void);
+void test_run_fb(void);
+void test_run_light(void);
+void test_run_lcyc(void);
+void test_run_nollm(void);
+void test_run_bgone(void);
+void test_run_bbad(void);
+
 #endif /* TEST_GRAD_INTERNAL_H */

@@ -517,6 +517,7 @@ if(BUILD_TESTS)
         tests/unit/test_grad_patch.c
         tests/unit/test_grad_c13.c
         tests/unit/test_grad_c12.c
+        tests/unit/test_grad_run.c
         ${COG_GRAD_TEST_SRCS})
     target_compile_definitions(test_grad_strategy PRIVATE AIRY_COMPLIANCE_IMPL)
     if(_cog_cjson_libs)
