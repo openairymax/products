@@ -13,8 +13,14 @@
  *   3. LLM 出口缺席 → no_llm（降级显式申报，不再是零值静默返回）；
  *   4. B 缺席（C11 残缺输出）→ b_unavailable；B 裁决契约违例 → b_invalid
  *      （计划按 C 放行，但语义复核缺失不得记为 converged）；
- *   5. 未收敛（J-16 无增益停止 / E-02 环计划）→ fail_closed，计划不放行；
- *   6. 降级产物（fallback_ 前缀计划）→ fail_closed + degraded。
+ *  5. 未收敛（J-16 无增益停止 / E-02 环计划 / 迭代耗尽）→ fail_closed，
+ *     计划不放行；
+ *  6. 降级产物（fallback_ 前缀计划）→ fail_closed + degraded。
+ *
+ * C8（部分失败语义）：每条失败路径同时断言 stats.stage 归因——同一
+ * 返回码可来自不同阶段（ESERVICE 覆盖 LLM 缺席与生成降级，ETIMEDOUT
+ * 覆盖 J-16 停止与迭代耗尽），stage 是调用方区分"重试还是改参"的
+ * 唯一依据；成功路径 stage 恒为 none，证明该位不是噪声。
  *
  * 全部用例经 grad_run() 生产入口装配（真协调器 + 真 LLM 调用域），
  * 仅 LLM 补全闭包被替身为确定性 fake——不绕过任何被验证逻辑。
@@ -39,8 +45,17 @@
     "{\"id\":\"S_02\",\"goal\":\"write\",\"role\":\"act\",\"depends\":[\"S_01\"]," \
     "\"inputs\":[\"S_01.ghost\"],\"outputs\":[\"report\"],\"cost_time_ms\":10}" \
     "],\"entry\":[\"S_01\"]}"
+/* A 计划：S_01↔S_02 互依赖 → E-02 死锁恒拒（优先级最高）。 */
+#define GR_PLAN_E02                                                             \
+    "{\"nodes\":["                                                              \
+    "{\"id\":\"S_01\",\"goal\":\"a\",\"role\":\"executor\",\"depends\":[\"S_02\"]," \
+    "\"outputs\":[\"a.out\"],\"cost_time_ms\":10},"                             \
+    "{\"id\":\"S_02\",\"goal\":\"b\",\"role\":\"executor\",\"depends\":[\"S_01\"]," \
+    "\"outputs\":[\"b.out\"],\"cost_time_ms\":10}"                              \
+    "],\"entry\":[\"S_01\"]}"
 
-/* LLM 补全闭包替身：按 system prompt 分流 A/B，返回预置 JSON 与终结因。 */
+/* LLM 补全闭包替身：按 system prompt 分流 A/B，返回预置 JSON 与终结因。
+ * a_seq 非空时按 A 调用序取计划（多轮序列），否则恒用 a_json。 */
 typedef struct {
     int a_calls;
     int b_calls;
@@ -48,6 +63,8 @@ typedef struct {
     const char *b_json;
     const char *a_fin;
     const char *b_fin;
+    const char *const *a_seq;
+    int a_seq_n;
 } gr_fake_t;
 
 static int gr_fake_cb(void *ctx, const llm_request_config_t *cfg, llm_response_t **out)
@@ -59,7 +76,13 @@ static int gr_fake_cb(void *ctx, const llm_request_config_t *cfg, llm_response_t
         return -1;
 
     const int is_b = strstr(cfg->messages[0].content, "(Model B)") != NULL;
-    const char *body = is_b ? f->b_json : f->a_json;
+    const char *body;
+    if (is_b)
+        body = f->b_json;
+    else if (f->a_seq)
+        body = (f->a_calls < f->a_seq_n) ? f->a_seq[f->a_calls] : NULL;
+    else
+        body = f->a_json;
     const char *fin = is_b ? f->b_fin : f->a_fin;
     if (is_b)
         f->b_calls++;
@@ -159,6 +182,7 @@ void test_run_conv(void)
     TEST_CHECK(err == AIRY_SUCCESS, "converged run returns success");
     TEST_CHECK(oc.converged == 1, "converged flag set");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_CONVERGED, "status must be converged");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_NONE, "stage must be none on clean pass");
     TEST_CHECK(oc.stats.rejections == 0, "zero rejections expected");
     TEST_CHECK(f.a_calls == 0, "model A must not be called");
     TEST_CHECK(f.b_calls == 1, "model B must arbitrate once");
@@ -179,6 +203,7 @@ void test_run_fix(void)
     airy_err_t err = gr_exec(&f, 0, seed, &oc);
     TEST_CHECK(err == AIRY_SUCCESS, "repaired run returns success");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_REPAIRED, "status must be repaired");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_NONE, "stage must be none when repair wins");
     TEST_CHECK(oc.stats.rejections == 1, "one rejection expected");
     TEST_CHECK(oc.stats.e05_count >= 1, "E-05 must be counted");
     TEST_CHECK(f.a_calls == 1, "model A regenerates once");
@@ -198,6 +223,7 @@ void test_run_closed(void)
     airy_err_t err = gr_exec(&f, 0, NULL, &oc);
     TEST_CHECK(err != AIRY_SUCCESS, "non-converged must not return success");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_FAIL_CLOSED, "status must be fail_closed");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_LOOP, "J-16 stop must attribute to loop");
     TEST_CHECK(oc.final_plan == NULL, "defective plan must not be released");
     TEST_CHECK(oc.stats.stopped == 1, "J-16 no-progress stop expected");
     TEST_CHECK(f.a_calls == 2, "skeleton + one regeneration");
@@ -215,6 +241,7 @@ void test_run_fb(void)
     airy_err_t err = gr_exec(&f, 0, seed, &oc);
     TEST_CHECK(err != AIRY_SUCCESS, "fallback product must not succeed");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_FAIL_CLOSED, "status must be fail_closed");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_GEN, "fallback product must attribute to gen");
     TEST_CHECK(oc.degraded == 1, "degraded flag must be set");
     TEST_CHECK(oc.final_plan == NULL, "fallback plan must be dropped");
     TEST_CHECK(f.a_calls == 0, "model A must not be called");
@@ -232,6 +259,7 @@ void test_run_light(void)
     airy_err_t err = gr_exec(&f, 1, seed, &oc);
     TEST_CHECK(err == AIRY_SUCCESS, "lightweight run passes deterministic checks");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_LIGHTWEIGHT, "status must be lightweight");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_NONE, "lightweight pass has no failed stage");
     TEST_CHECK(f.a_calls == 0, "lightweight must not spend generation tokens");
     TEST_CHECK(f.b_calls == 0, "lightweight must skip semantic arbitration");
     TEST_CHECK(oc.final_plan != NULL, "verified seed must be released");
@@ -251,6 +279,7 @@ void test_run_lcyc(void)
     airy_err_t err = gr_exec(&f, 1, seed, &oc);
     TEST_CHECK(err != AIRY_SUCCESS, "cyclic plan must not converge");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_FAIL_CLOSED, "status must be fail_closed");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_LOOP, "cycle in single round attributes to loop");
     TEST_CHECK(oc.final_plan == NULL, "cyclic plan must not be released");
     TEST_CHECK(f.a_calls == 0, "single round must not regenerate");
     free_plan(seed);
@@ -270,6 +299,7 @@ void test_run_nollm(void)
     airy_err_t err = grad_run(&l, seed, &oc);
     TEST_CHECK(err != AIRY_SUCCESS, "absent LLM must not converge");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_NO_LLM, "status must be no_llm");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_LLM, "absent LLM attributes to llm stage");
     TEST_CHECK(oc.degraded == 1, "degraded flag must be set");
     TEST_CHECK(oc.final_plan == NULL, "no plan may be released");
     free_plan(seed);
@@ -286,6 +316,7 @@ void test_run_bgone(void)
     airy_err_t err = gr_exec(&f, 0, seed, &oc);
     TEST_CHECK(err == AIRY_SUCCESS, "C verdict still releases the plan");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_B_UNAVAILABLE, "status must be b_unavailable");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_ARBITER, "B absence attributes to arbiter");
     TEST_CHECK(oc.stats.arbiter_unavailable == 1, "B absence must be counted");
     TEST_CHECK(f.b_calls == 1, "model B attempted once");
     TEST_CHECK(oc.final_plan != NULL, "plan released under C verdict");
@@ -305,6 +336,7 @@ void test_run_bbad(void)
     airy_err_t err = gr_exec(&f, 0, seed, &oc);
     TEST_CHECK(err == AIRY_SUCCESS, "C verdict still releases the plan");
     TEST_CHECK(oc.stats.status == GRAD_STATUS_B_INVALID, "status must be b_invalid");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_ARBITER, "B violation attributes to arbiter");
     TEST_CHECK(oc.stats.arbiter_invalid == 1, "B contract violation must be counted");
     TEST_CHECK(f.b_calls == 1, "model B attempted once");
     TEST_CHECK(oc.final_plan != NULL, "plan released under C verdict");
@@ -312,4 +344,28 @@ void test_run_bbad(void)
         free_plan(oc.final_plan);
     free_plan(seed);
     TEST_PASS("B 违例申报 b_invalid");
+}
+
+/* 路径 10（C8）：A 三轮产出互不相同的缺陷（E-01 → E-02 → E-01），相邻
+ * 轮缺陷码不同 → J-16 无增益判定不成立，走到迭代耗尽 → fail_closed +
+ * stage=loop + stopped=0。E-05 不能用作候选：A 产出的计划由 C4 元数据
+ * 推导补全，元数据永不缺失（E-05 只有裸 seed 一条来源，见路径 2）。
+ * 与路径 3 的差别只在"停止原因"：两者返回码同为 ETIMEDOUT，仅 stage
+ * 与 stopped 能区分"修复环已无信息增益"与"轮次预算用完"。 */
+void test_run_exh(void)
+{
+    static const char *const seq[3] = {GR_PLAN_E01, GR_PLAN_E02, GR_PLAN_E01};
+    gr_fake_t f = {.b_json = GR_ACC, .a_seq = seq, .a_seq_n = 3};
+    airy_grad_outcome_t oc;
+    airy_err_t err = gr_exec(&f, 0, NULL, &oc);
+    TEST_CHECK(err == AIRY_ETIMEDOUT, "iteration exhaustion returns timeout");
+    TEST_CHECK(oc.stats.status == GRAD_STATUS_FAIL_CLOSED, "status must be fail_closed");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_LOOP, "exhaustion must attribute to loop");
+    TEST_CHECK(oc.stats.stopped == 0, "exhaustion must not be reported as J-16 stop");
+    TEST_CHECK(oc.stats.converged == 0, "must not converge");
+    TEST_CHECK(oc.stats.rejections == 3, "three rejections expected");
+    TEST_CHECK(f.a_calls == 3, "skeleton + one regeneration per non-final round");
+    TEST_CHECK(f.b_calls == 0, "non-E-04 failures must not call B");
+    TEST_CHECK(oc.final_plan == NULL, "unverified plan must not be released");
+    TEST_PASS("迭代耗尽申报 fail_closed + loop");
 }
