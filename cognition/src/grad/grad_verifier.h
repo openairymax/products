@@ -125,6 +125,19 @@ typedef struct airy_grad_report {
 } airy_grad_report_t;
 
 /**
+ * @brief 位图 → 单值裁决的唯一映射（Gate 32）。
+ *
+ * 优先级 E-02 > E-05 > E-01 > E-03 > E-04：死锁使因果遍历无意义，
+ * 元数据不全使因果判定不可信，故二者先于 E-01；E-03/E-04 是局部
+ * 约束，排在因果之后。无任何位时返回 AIRY_GRAD_OK。
+ *
+ * @param errors [in] report->errors 位图（AIRY_GRAD_ERR_BIT 按位或）
+ * @return 最高优先级错误码；无错误为 AIRY_GRAD_OK
+ * @threadsafe yes（纯函数）
+ */
+airy_grad_error_t grad_err_rank(uint32_t errors);
+
+/**
  * @brief Run the GRAD four-way verification (E-01 causality / E-02 deadlock / E-03 resources).
  *
  * Performs deterministic hard-logic verification of the task plan.
