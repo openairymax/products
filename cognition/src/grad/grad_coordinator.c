@@ -535,6 +535,9 @@ static airy_err_t grad_arb_stage(airy_grad_coordinator_t *coord, const airy_task
     airy_err_t rc = grad_verdict_parse(verdict_json, plan, &v);
     if (rc != AIRY_SUCCESS) {
         AIRY_LOG_WARN("GRAD-B: arbiter_parse_error (err=%d), deferring to Model C", (int)rc);
+        /* C7：无证据/违例裁决单列计数，终态申报为 b_invalid（计划放行，
+         * 但语义复核缺失不可并入 converged）。 */
+        coord->stats.arbiter_invalid++;
         grad_progress(coord, 0, "grad_arbiter_parse_error", "{\"fallback\":\"accept_c_verdict\"}");
         return AIRY_SUCCESS;
     }
@@ -892,6 +895,17 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             coord->stats.stopped = 1;
             AIRY_LOG_WARN("GRAD: no progress between consecutive rounds, stop (J-16)");
             grad_progress(coord, 0, "grad_no_progress", "{\"action\":\"stop\"}");
+            if (round.patch_json) {
+                AIRY_FREE(round.patch_json);
+                round.patch_json = NULL;
+            }
+            break;
+        }
+
+        /* C7（0.1.20）：末轮不再生成。本轮之后循环即结束，任何新计划都不
+         * 可能再经 C/B 验证，生成即纯浪费；轻载档 max_iterations=1，此处
+         * 正是唯一生成点，放行会直接破坏"零生成 token"契约。 */
+        if (k + 1U >= coord->config.max_iterations) {
             if (round.patch_json) {
                 AIRY_FREE(round.patch_json);
                 round.patch_json = NULL;
