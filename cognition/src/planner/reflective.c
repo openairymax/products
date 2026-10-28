@@ -16,6 +16,9 @@
  * build_fallback_plan）已拆分至 reflective_llm_plan.c（超 800 行文件拆分），
  * 共享契约见 reflective_internal.h。
  *
+ * 0.1.20 P1-4：四相评估批判（分数+理由）落盘 heapstore journal critiques
+ * 域（COG_HAS_HEAPSTORE 门控，机制件缺席时静默保持内存态）。
+ *
  * 0.1.19 M5-4 §271 自 atoms/coreloopthree src/cognition/think/planner/
  * 迁入 products/cognition（族内归格 src/planner/）。
  */
@@ -36,6 +39,11 @@
 #include "llm_client.h"
 #include "error.h"
 #include "plan_strategy.h"
+
+#ifdef COG_HAS_HEAPSTORE
+#include "heapstore_journal.h"
+#include <time.h>
+#endif
 
 /* ============================================================================
  * Real S2 content generator — calls the LLM service
@@ -127,6 +135,40 @@ static int real_s1_verify(const char *content, size_t len, float confidence, voi
 
     return (quality >= 0.7f) ? 1 : 0;
 }
+
+/* ============================================================================
+ * P1-4 批判落盘：四相评估的分数与理由写入 heapstore journal critiques 域，
+ * turn_id 以会话目标+步号定位，机制件缺席时静默保持内存态（可拔插纪律）
+ * ============================================================================ */
+
+#ifdef COG_HAS_HEAPSTORE
+static void jour_critique(const char *goal, uint32_t step_id,
+                          const mc_evaluation_result_t *eval, const char *atom)
+{
+    heapstore_critique_rec_t rec;
+
+    if (!eval || !atom)
+        return;
+
+    AIRY_MEMSET(&rec, 0, sizeof(rec));
+    snprintf(rec.turn_id, sizeof(rec.turn_id), "%s#%u", goal ? goal : "unknown", step_id);
+    snprintf(rec.atom, sizeof(rec.atom), "%s", atom);
+    rec.score = (double)eval->overall_score;
+    snprintf(rec.reason, sizeof(rec.reason), "%s",
+             eval->critique_text ? eval->critique_text : "");
+    rec.created_at = (int64_t)time(NULL);
+    (void)hs_jour_add(heapstore_JOUR_CRITIQUES, &rec);
+}
+#else
+static void jour_critique(const char *goal, uint32_t step_id,
+                          const mc_evaluation_result_t *eval, const char *atom)
+{
+    (void)goal;
+    (void)step_id;
+    (void)eval;
+    (void)atom;
+}
+#endif
 
 /* ============================================================================
  * Reflective planning implementation
@@ -275,6 +317,7 @@ static airy_err_t reflective_plan(const airy_intent_t *intent, void *context,
     if (eval_decomp.strategy == MC_CORRECT_AUTO || eval_decomp.strategy == MC_CORRECT_RERUN) {
         mc->correct(ctx->meta, step_decomp, &eval_decomp, real_s2_generate, ctx);
     }
+    jour_critique(goal_buf, step_decomp->step_id, &eval_decomp, "decomposition");
     if (eval_decomp.critique_text)
         AIRY_FREE(eval_decomp.critique_text);
     if (decomp_output)
@@ -311,6 +354,7 @@ static airy_err_t reflective_plan(const airy_intent_t *intent, void *context,
     if (eval_plan.strategy == MC_CORRECT_AUTO || eval_plan.strategy == MC_CORRECT_RERUN) {
         mc->correct(ctx->meta, step_plan, &eval_plan, real_s2_generate, ctx);
     }
+    jour_critique(goal_buf, step_plan->step_id, &eval_plan, "planning");
     if (eval_plan.critique_text)
         AIRY_FREE(eval_plan.critique_text);
     if (plan_output)
@@ -398,6 +442,7 @@ static airy_err_t reflective_plan(const airy_intent_t *intent, void *context,
     tc->step_complete(step_audit, audit_result, (size_t)ar_len, eval_audit.overall_score,
                       "S1-auditor");
 
+    jour_critique(goal_buf, step_exec->step_id, &eval_audit, "audit");
     if (eval_audit.critique_text)
         AIRY_FREE(eval_audit.critique_text);
 
@@ -415,6 +460,7 @@ static airy_err_t reflective_plan(const airy_intent_t *intent, void *context,
     tc->step_complete(step_align, aligned ? "goal_aligned" : "goal_drift_detected",
                       aligned ? 12 : 18, eval_align.overall_score, "S1-alignment");
 
+    jour_critique(goal_buf, step_align->step_id, &eval_align, "alignment");
     if (eval_align.critique_text)
         AIRY_FREE(eval_align.critique_text);
 
