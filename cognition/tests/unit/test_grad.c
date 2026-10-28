@@ -255,6 +255,15 @@ int main(void)
     RUN_TEST(test_ctxb_char_cap);
     RUN_TEST(test_ctxb_sem_gate);
     RUN_TEST(test_ctxb_sem_cap_grows);
+    RUN_TEST(test_run_conv);
+    RUN_TEST(test_run_fix);
+    RUN_TEST(test_run_closed);
+    RUN_TEST(test_run_fb);
+    RUN_TEST(test_run_light);
+    RUN_TEST(test_run_lcyc);
+    RUN_TEST(test_run_nollm);
+    RUN_TEST(test_run_bgone);
+    RUN_TEST(test_run_bbad);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
            tests_failed);

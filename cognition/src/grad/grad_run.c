@@ -15,6 +15,11 @@
  * 由协调器传出）；其他错误码（含降级 AIRY_EFAIL）→ fail-closed，
  * final_plan 必 NULL，调用方转人工评审。SUCCESS + final_plan=NULL 是
  * 契约违约，防御性 fail-closed，绝不放行未验证计划。
+ *
+ * 0.1.20 C7：出口统一申报 grad_status_e 终态（converged / repaired /
+ * fail_closed / lightweight / no_llm）——降级与验证深度降低一律不得以
+ * converged 流出。轻载档（launch.lightweight=1）只跑单轮 C 确定性四验，
+ * 零生成 token，E-02 环检测等安全守门保持生效。
  */
 
 #include "grad_internal.h"
@@ -30,8 +35,21 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     if (!launch || !out_outcome)
         return AIRY_EINVAL;
     __builtin_memset(out_outcome, 0, sizeof(*out_outcome));
-    if (!launch->complete)
+    /* C7（0.1.20）：终态先置 fail-closed——枚举 0 即 converged，任何
+     * 早退/装配失败路径都不得被误读为"已收敛"（fail-safe by default）。 */
+    out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
+
+    const int light = launch->lightweight ? 1 : 0;
+    /* 轻载档不经模型 A，seed 是唯一候选来源（缺席即入参非法）。 */
+    if (light && !seed_plan)
+        return AIRY_EINVAL;
+    if (!launch->complete && !light) {
+        /* C7 路径 1：LLM 出口缺席，批判环未运行——显式申报终态，
+         * 不再以零值静默返回（降级必须可观测）。 */
+        out_outcome->degraded = 1;
+        out_outcome->stats.status = GRAD_STATUS_NO_LLM;
         return AIRY_ESERVICE;
+    }
 
     grad_llm_ctx_t grad_ctx;
     __builtin_memset(&grad_ctx, 0, sizeof(grad_ctx));
@@ -78,6 +96,18 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     grad_cfg.progress_cb = launch->progress_cb;
     grad_cfg.progress_user_data = launch->progress_user_data;
 
+    /* C7（0.1.20）轻载档：单轮 + 仅 C 确定性四验。B 语义仲裁与失败路径
+     * 仲裁全部缺席（零生成 token）；C 四验（E-01/E-02/E-03/E-05）不降级
+     * ——环检测等安全守门必须在低算力设备上同样生效。 */
+    if (light) {
+        grad_cfg.max_iterations = 1;
+        grad_cfg.s1_arbiter = NULL;
+        grad_cfg.s1_user_data = NULL;
+        grad_cfg.s1_failure = NULL;
+        grad_cfg.round_note_cb = NULL;
+        grad_cfg.round_note_user_data = NULL;
+    }
+
     airy_grad_coordinator_t *grad_coord = NULL;
     airy_err_t grad_err = airy_grad_coordinator_create(&grad_cfg, &grad_coord);
     if (grad_err != AIRY_SUCCESS || !grad_coord) {
@@ -101,13 +131,25 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
         out_outcome->stats.cached_tokens += grad_ctx.usage[r].cached;
 
     /* C7（0.1.20）：门禁状态机终态——run 出口是唯一裁决点（协调器不知
-     * 降级检出与 fallback 结果）。converged = 零驳回过门；repaired =
-     * 经修复环收敛；fail_closed = 未收敛/降级产物/契约违约/服务故障
-     * （下游统一走人工评审，G45：降级路径终态必非 converged）。 */
-    out_outcome->stats.status = (grad_err == AIRY_SUCCESS)
-                                    ? (grad_stats.rejections == 0 ? GRAD_STATUS_CONVERGED
-                                                                  : GRAD_STATUS_REPAIRED)
-                                    : GRAD_STATUS_FAIL_CLOSED;
+     * 降级检出与 fallback 结果）。取值优先级：硬失败 > 轻载 > B 违例 >
+     * B 缺席 > 有驳回修复收敛 > 零驳回。hard-fail 优先保证「计划不放行」
+     * 不被任何降级标签掩盖。 */
+    if (grad_err != AIRY_SUCCESS)
+        out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
+    else if (light)
+        /* 轻载档的"收敛"不含语义仲裁，验证深度与完整批判环不等价，
+         * 单独申报为未知态，禁止并入 converged/repaired 统计。 */
+        out_outcome->stats.status = GRAD_STATUS_LIGHTWEIGHT;
+    else if (grad_stats.arbiter_invalid)
+        /* 计划按 C 判定放行，但 B 的结论不可采（违例/无证据），
+         * 语义复核缺失必须显式申报，不得记为 converged。 */
+        out_outcome->stats.status = GRAD_STATUS_B_INVALID;
+    else if (grad_stats.arbiter_unavailable)
+        out_outcome->stats.status = GRAD_STATUS_B_UNAVAILABLE;
+    else if (grad_stats.rejections == 0)
+        out_outcome->stats.status = GRAD_STATUS_CONVERGED;
+    else
+        out_outcome->stats.status = GRAD_STATUS_REPAIRED;
 
     /* 0.1.20 B1-e：outcome 回填分角色 usage，聚合三字段 = 各角色求和
      * （对账校验位：聚合与分角色必须自洽，成本复算二选一皆可）。 */
@@ -131,7 +173,8 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
                  "\"b_prompt\":%u,\"b_completion\":%u,\"b_total\":%u}",
                  out_outcome->prompt_tokens, out_outcome->completion_tokens,
                  out_outcome->total_tokens, out_outcome->stats.cached_tokens,
-                 (unsigned long long)grad_stats.plan_digest, (unsigned)grad_stats.status,
+                 (unsigned long long)grad_stats.plan_digest,
+                 (unsigned)out_outcome->stats.status,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].prompt,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].completion,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].total,
