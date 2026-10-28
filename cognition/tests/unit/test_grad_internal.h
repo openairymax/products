@@ -167,5 +167,6 @@ void test_run_lcyc(void);
 void test_run_nollm(void);
 void test_run_bgone(void);
 void test_run_bbad(void);
+void test_run_exh(void);
 
 #endif /* TEST_GRAD_INTERNAL_H */

@@ -41,13 +41,16 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
 
     const int light = launch->lightweight ? 1 : 0;
     /* 轻载档不经模型 A，seed 是唯一候选来源（缺席即入参非法）。 */
-    if (light && !seed_plan)
+    if (light && !seed_plan) {
+        out_outcome->stats.stage = GRAD_STAGE_INPUT;
         return AIRY_EINVAL;
+    }
     if (!launch->complete && !light) {
         /* C7 路径 1：LLM 出口缺席，批判环未运行——显式申报终态，
          * 不再以零值静默返回（降级必须可观测）。 */
         out_outcome->degraded = 1;
         out_outcome->stats.status = GRAD_STATUS_NO_LLM;
+        out_outcome->stats.stage = GRAD_STAGE_LLM;
         return AIRY_ESERVICE;
     }
 
@@ -80,8 +83,10 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     grad_ctxb_sem_init();
 
     airy_err_t trace_err = grad_llm_trace_open(&grad_ctx);
-    if (trace_err != AIRY_SUCCESS)
+    if (trace_err != AIRY_SUCCESS) {
+        out_outcome->stats.stage = GRAD_STAGE_CHANNEL;
         return trace_err;
+    }
 
     airy_grad_config_t grad_cfg = AIRY_GRAD_CONFIG_DEFAULTS;
     grad_cfg.s2_plan = grad_llm_s2_plan;
@@ -112,6 +117,7 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     airy_err_t grad_err = airy_grad_coordinator_create(&grad_cfg, &grad_coord);
     if (grad_err != AIRY_SUCCESS || !grad_coord) {
         grad_llm_trace_close(&grad_ctx);
+        out_outcome->stats.stage = GRAD_STAGE_CHANNEL;
         return grad_err != AIRY_SUCCESS ? grad_err : AIRY_EFAIL;
     }
 
@@ -151,6 +157,26 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     else
         out_outcome->stats.status = GRAD_STATUS_REPAIRED;
 
+    /* P1：GRAD 降级产物（LLM 故障时模型 A 返回 "fallback_" 前缀空壳
+     * 单节点计划，C/B 判定"收敛"）不得作为精化结果流出批判门——降级
+     * 收敛意味着 seed 计划从未通过 C/B 验证（C 验证的是空壳、B 仲裁也
+     * 故障 defer），绝不能被当作已验证放行——置 degraded 走 fail-closed
+     * 人工评审。C8：归因于生成阶段（GEN），且必须先于 trace 落盘，
+     * 否则 trace 会记下被覆盖前的 converged 状态。 */
+    if (grad_err == AIRY_SUCCESS && grad_final && grad_final->task_plan_id &&
+        strncmp(grad_final->task_plan_id, "fallback_", 9) == 0) {
+        AIRY_LOG_WARN("GRAD: converged on degraded fallback plan, seed NOT verified "
+                      "(plan_id=%s) — manual review required",
+                      grad_final->task_plan_id);
+        airy_task_plan_free(grad_final);
+        grad_final = NULL;
+        out_outcome->degraded = 1;
+        /* C7/G45：降级路径终态必非 converged（P1 检出先于状态机出口） */
+        out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
+        out_outcome->stats.stage = GRAD_STAGE_GEN;
+        grad_err = AIRY_EFAIL;
+    }
+
     /* 0.1.20 B1-e：outcome 回填分角色 usage，聚合三字段 = 各角色求和
      * （对账校验位：聚合与分角色必须自洽，成本复算二选一皆可）。 */
     for (int r = 0; r < AIRY_GRAD_ROLE_COUNT; r++) {
@@ -169,12 +195,14 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
         snprintf(tok_trace, sizeof(tok_trace),
                  "{\"prompt_tokens\":%u,\"completion_tokens\":%u,\"total_tokens\":%u,"
                  "\"cached_tokens\":%u,\"digest\":\"%016llx\",\"status\":%u,"
+                 "\"stage\":%u,"
                  "\"a_prompt\":%u,\"a_completion\":%u,\"a_total\":%u,"
                  "\"b_prompt\":%u,\"b_completion\":%u,\"b_total\":%u}",
                  out_outcome->prompt_tokens, out_outcome->completion_tokens,
                  out_outcome->total_tokens, out_outcome->stats.cached_tokens,
                  (unsigned long long)grad_stats.plan_digest,
                  (unsigned)out_outcome->stats.status,
+                 (unsigned)out_outcome->stats.stage,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].prompt,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].completion,
                  out_outcome->usage[AIRY_GRAD_ROLE_A].total,
@@ -186,34 +214,20 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     grad_llm_trace_close(&grad_ctx);
 
     if (grad_err == AIRY_SUCCESS && grad_final) {
-        /* P1：GRAD 降级产物（LLM 故障时模型 A 返回 "fallback_" 前缀空壳
-         * 单节点计划，C/B 判定"收敛"）不得作为精化结果流出批判门——
-         * 降级收敛意味着 seed 计划从未通过 C/B 验证（C 验证的是空壳、
-         * B 仲裁也故障 defer），绝不能被当作已验证放行——置 degraded 走
-         * fail-closed 人工评审。 */
-        if (grad_final->task_plan_id &&
-            strncmp(grad_final->task_plan_id, "fallback_", 9) == 0) {
-            AIRY_LOG_WARN("GRAD: converged on degraded fallback plan, seed NOT verified "
-                          "(plan_id=%s) — manual review required",
-                          grad_final->task_plan_id);
-            airy_task_plan_free(grad_final);
-            out_outcome->degraded = 1;
-            /* C7/G45：降级路径终态必非 converged（P1 检出先于状态机出口） */
-            out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
-            return AIRY_EFAIL;
-        }
         out_outcome->final_plan = grad_final;
         return AIRY_SUCCESS;
     }
     /* G53（0.1.20）：SUCCESS 必伴随 final_plan（协调器对 seed 过门场景
      * 传出深拷贝）。此分支是契约违约的防御性 fail-closed：无产物的
-     * "成功"意味着批判门没有真正把过关，绝不允许静默放行 seed。 */
+     * "成功"意味着批判门没有真正把过关，绝不允许静默放行 seed。
+     * C8：交付链违约（结果未能送达调用方）归因于 channel。 */
     if (grad_err == AIRY_SUCCESS && !grad_final) {
         AIRY_LOG_ERROR("GRAD: contract violation (SUCCESS without final_plan) "
                        "— fail-closed, manual review required");
         out_outcome->degraded = 1;
         /* C7/G45：契约违约路径终态必非 converged */
         out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
+        out_outcome->stats.stage = GRAD_STAGE_CHANNEL;
         return AIRY_EFAIL;
     }
     if (grad_final) {

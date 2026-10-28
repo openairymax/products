@@ -538,6 +538,7 @@ static airy_err_t grad_arb_stage(airy_grad_coordinator_t *coord, const airy_task
         /* C7：无证据/违例裁决单列计数，终态申报为 b_invalid（计划放行，
          * 但语义复核缺失不可并入 converged）。 */
         coord->stats.arbiter_invalid++;
+        coord->stats.stage = GRAD_STAGE_ARBITER;
         grad_progress(coord, 0, "grad_arbiter_parse_error", "{\"fallback\":\"accept_c_verdict\"}");
         return AIRY_SUCCESS;
     }
@@ -670,6 +671,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
         err = coord->config.s2_plan(goal, NULL, &plan, coord->config.s2_user_data);
         if (err != AIRY_SUCCESS || !plan) {
             AIRY_LOG_ERROR("GRAD: S2 skeleton generation failed (err=%d)", (int)err);
+            coord->stats.stage = GRAD_STAGE_GEN;
             coord->active = 0;
             return err ? err : AIRY_ESERVICE;
         }
@@ -722,6 +724,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
                                        &report);
         if (err != AIRY_SUCCESS && err != AIRY_EINVAL) {
             AIRY_LOG_WARN("GRAD: verify failed (err=%d), aborting loop", (int)err);
+            coord->stats.stage = GRAD_STAGE_VERIFY;
             loop_err = err;
             break;
         }
@@ -795,6 +798,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
                                          &round.patch_json, &delta_scope, &delta_scope_count);
                     AIRY_FREE(verdict);
                     if (err != AIRY_SUCCESS) {
+                        coord->stats.stage = GRAD_STAGE_ARBITER;
                         loop_err = err;
                         break;
                     }
@@ -815,6 +819,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
                      * 服务故障）显式降级。C 的确定性判定仍然成立（B 语义本就
                      * 是上下文复核），但此前静默吞掉——B 故障在事件流不可归因。 */
                     coord->stats.arbiter_unavailable++;
+                    coord->stats.stage = GRAD_STAGE_ARBITER;
                     char ab[96];
                     snprintf(ab, sizeof(ab), "{\"round\":%u,\"err\":%d}", (unsigned)k,
                              (int)arb_err);
@@ -845,6 +850,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             err = grad_fail_stage(coord, goal, plan, k, &report, &hist, round_start_ns, &fo);
             if (err != AIRY_SUCCESS) {
                 AIRY_LOG_WARN("GRAD: failure stage failed (err=%d)", (int)err);
+                coord->stats.stage = GRAD_STAGE_VERIFY;
                 loop_err = err;
                 break;
             }
@@ -885,6 +891,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
         if (err != AIRY_SUCCESS) {
             if (round.patch_json)
                 AIRY_FREE(round.patch_json);
+            coord->stats.stage = GRAD_STAGE_CHANNEL;
             loop_err = err;
             break;
         }
@@ -920,6 +927,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
 
             if (round.patch_json)
                 AIRY_FREE(round.patch_json);
+            coord->stats.stage = GRAD_STAGE_GEN;
             loop_err = err ? err : AIRY_ESERVICE;
             break;
         }
@@ -978,6 +986,12 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
     /* E1（0.1.20）：终态计划指纹（含未收敛轮的最后状态，审计可回放） */
     coord->stats.plan_digest = grad_plan_digest(plan);
 
+    /* C8（0.1.20）：失败阶段兜底归因——修复环未收敛且此前无更早阶段
+     * 归因（J-16 无进展即停 / 迭代耗尽），统一申报为 loop，使调用方
+     * 能把"给不出更好计划"与"哪一步坏了"区分开。 */
+    if (!coord->stats.converged && coord->stats.stage == GRAD_STAGE_NONE)
+        coord->stats.stage = GRAD_STAGE_LOOP;
+
     if (out_stats)
         *out_stats = coord->stats;
 
@@ -1000,6 +1014,7 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
              * re-synced: the earlier snapshot still said converged. */
             AIRY_LOG_ERROR("GRAD: seed pass-through clone failed (err=%d)", (int)cl_err);
             coord->stats.converged = 0;
+            coord->stats.stage = GRAD_STAGE_CHANNEL;
             if (out_stats)
                 *out_stats = coord->stats;
             *out_plan = NULL;
