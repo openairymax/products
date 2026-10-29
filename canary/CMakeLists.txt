@@ -8,7 +8,7 @@
 #                 经 AGENTRT_ROOT 承接版本 SSoT（仅 VERSION，零代码依赖）。
 #
 # 机制核定位：零第三方依赖（C11 + libc + <stdatomic.h>），五态机 /
-# 爆炸半径守卫 / kill switch 三通道 / overlay manifest（base SHA-256）。
+# 爆炸半径守卫 / kill switch 四通道 / overlay manifest（base SHA-256）。
 # 策略面在宿主（dpolicy 等）经挂载点接线，本库不携带默认策略。
 # =============================================================================
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
