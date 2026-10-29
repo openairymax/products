@@ -241,7 +241,7 @@ void canary_counts(const canary_t *c, uint64_t *total, uint64_t *picked)
         *picked = c ? atomic_load(&c->n_picked) : 0ull;
 }
 
-/* ---- kill switch 三通道 ---- */
+/* ---- kill switch 探测（env / 全局文件 / 实例哨兵；CLI 通道落盘同一哨兵）---- */
 
 static char g_ks_env[CANARY_NAME_MAX];
 static char g_ks_file[CANARY_PATH_MAX];

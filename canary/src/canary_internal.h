@@ -23,7 +23,7 @@ struct canary_s {
     atomic_uint stage;      /* C2 阶梯 0..2 */
     atomic_uint permille;   /* 灰度千分比 */
     atomic_int ks_on;       /* kill switch 命中态 */
-    atomic_llong ks_until;  /* 三通道探测缓存到期时刻 ms */
+    atomic_llong ks_until;  /* kill switch 探测缓存到期时刻 ms */
     atomic_ullong n_total;  /* route 总调用数 */
     atomic_ullong n_picked; /* route 演化路径数 */
     uint64_t stage_since;   /* 当前级进入时刻（转移路径串行写） */

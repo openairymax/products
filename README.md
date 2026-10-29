@@ -70,6 +70,9 @@ products/                       # this management repository (AGPL v3 + Apache 2
 │                               #   Cognitive strategy payloads (dispatch · plan · …)
 ├── gateway_biz/                # directly-tracked embedded product piece (gateway_d only)
 │                               #   Gateway business handler (dispatch · forward · PEP cache)
+├── canary/                     # directly-tracked product piece (evolution face)
+│                               #   Canary self-evolution gate: state machine, blast
+│                               #   radius guard, overlay manifest, kill switch
 ├── .gitmodules                 # submodule wiring (2 entries)
 ├── .gitignore                  # whitelist: files + submodule mount points
 ├── LICENSE                     # AGPL v3 + Apache 2.0 (management repo only)
@@ -87,10 +90,11 @@ products/                       # this management repository (AGPL v3 + Apache 2
 | **lang_gateway** | direct | `lang_gateway/` | AGPL v3 + Apache 2.0 | Inference language gateway (`airy_lang_gateway`) — canonicalizes natural-language input and routes it to the right model. |
 | **cognition** | direct | `cognition/` | AGPL v3 + Apache 2.0 | Cognitive strategy payloads (`airy_cognition_strategy`) — dispatch, planning, coordination, review and intent strategies injected into the daemons. |
 | **gateway_biz** | direct (embedded) | `gateway_biz/` | AGPL v3 + Apache 2.0 | Gateway business handler (`airy_gateway_biz`) — unified capability dispatch, namespace forwarding, MCP/OpenAI/A2A backends and the PEP verdict cache; assembled by `gateway_d` only. |
+| **canary** | direct | `canary/` | AGPL v3 + Apache 2.0 | Canary self-evolution gate (`airy_canary`) — five-state machine, blast radius guard, overlay manifest with base SHA-256 and a four-channel kill switch. Mechanism only; mounted by `cupolas` through `dpolicy_canary_ops_t`. |
 
-> **Licensing note.** `cupolas`, `lang_gateway`, `cognition` and `gateway_biz`
-> use the same AGPL v3 + Apache 2.0 dual license as the rest of the Airymax
-> platform
+> **Licensing note.** `cupolas`, `lang_gateway`, `cognition`, `gateway_biz` and
+> `canary` use the same AGPL v3 + Apache 2.0 dual license as the rest of the
+> Airymax platform
 > (SPDX: `AGPL-3.0-or-later OR Apache-2.0`). `memoryrovol` is **not**
 > open-source: it is governed by the SPHARX Commercial EULA v1.0
 > (SPDX: `LicenseRef-SPHARX-MemoryRovol-EULA-1.0`) and its use requires a
@@ -352,6 +356,8 @@ the management-repository license above does not override them:
 | `cupolas/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
 | `lang_gateway/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
 | `cognition/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
+| `gateway_biz/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
+| `canary/` | AGPL v3 + Apache 2.0 (dual) | `AGPL-3.0-or-later OR Apache-2.0` |
 | `memoryrovol/` | **SPHARX Commercial EULA v1.0 (proprietary, closed-source)** | `LicenseRef-SPHARX-MemoryRovol-EULA-1.0` |
 
 In particular, **`memoryrovol` is NOT open source** and is not covered by

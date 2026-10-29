@@ -56,6 +56,9 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
 │                               #   认知策略载荷（分发 · 规划 · …）
 ├── gateway_biz/                # 直接追踪的嵌入式产品件（仅 gateway_d 装配）
 │                               #   网关业务处理面（派发 · 转发 · PEP 缓存）
+├── canary/                     # 直接追踪的产品件（演化面）
+│                               #   金丝雀自演化门控：五态机 · 爆炸半径守卫 ·
+│                               #   overlay manifest · kill switch 四通道
 ├── .gitmodules                 # submodule 配置（2 个条目）
 ├── .gitignore                  # 白名单：文件 + submodule 挂点
 ├── LICENSE                     # AGPL v3 + Apache 2.0（仅限管理仓本身）
@@ -73,8 +76,10 @@ products/                       # 本管理仓（AGPL v3 + Apache 2.0）
 | **lang_gateway** | 直接追踪 | `lang_gateway/` | AGPL v3 + Apache 2.0 | 推理语言网关（`airy_lang_gateway`）—— 将自然语言输入标准化并路由至合适的模型。 |
 | **cognition** | 直接追踪 | `cognition/` | AGPL v3 + Apache 2.0 | 认知策略载荷（`airy_cognition_strategy`）—— 分发、规划、协调、审查、意图策略，注入 daemon。 |
 | **gateway_biz** | 直接追踪（嵌入式） | `gateway_biz/` | AGPL v3 + Apache 2.0 | 网关业务处理面（`airy_gateway_biz`）—— 统一能力派发、命名空间转发、MCP/OpenAI/A2A 后端与 PEP 裁定缓存，仅由 `gateway_d` 装配。 |
+| **canary** | 直接追踪 | `canary/` | AGPL v3 + Apache 2.0 | 金丝雀自演化门控（`airy_canary`）—— 五态机、爆炸半径守卫、带 base SHA-256 的 overlay manifest 与四通道 kill switch。纯机制，由 `cupolas` 经 `dpolicy_canary_ops_t` 挂载。 |
 
-> **许可证说明。** `cupolas`、`lang_gateway`、`cognition` 与 `gateway_biz` 采用与
+> **许可证说明。** `cupolas`、`lang_gateway`、`cognition`、`gateway_biz` 与
+> `canary` 采用与
 > Airymax 平台其余部分一致的 AGPL v3 + Apache 2.0 双许可证
 > （SPDX：`AGPL-3.0-or-later OR Apache-2.0`）。
 > `memoryrovol` **不是**开源软件：受 SPHARX 商业 EULA v1.0 约束
@@ -278,6 +283,7 @@ SPDX：`AGPL-3.0-or-later OR Apache-2.0`。可任选其一。两份许可证全�
 |------|--------|------|
 | `cupolas/` | AGPL v3 + Apache 2.0（双许可证） | `AGPL-3.0-or-later OR Apache-2.0` |
 | `lang_gateway/` | AGPL v3 + Apache 2.0（双许可证） | `AGPL-3.0-or-later OR Apache-2.0` |
+| `canary/` | AGPL v3 + Apache 2.0（双许可证） | `AGPL-3.0-or-later OR Apache-2.0` |
 | `memoryrovol/` | **SPHARX 商业 EULA v1.0（专有、闭源）** | `LicenseRef-SPHARX-MemoryRovol-EULA-1.0` |
 
 特别地，**`memoryrovol` 不是开源软件**，不受 AGPL v3 或 Apache 2.0 任一许可证
