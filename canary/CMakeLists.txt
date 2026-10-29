@@ -79,7 +79,10 @@ target_include_directories(airy_canary
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 if(MSVC)
-    target_compile_options(airy_canary PRIVATE /W4)
+    # <stdatomic.h> 在 MSVC 14.3x+ 需显式开启实验性 C11 原子支持，
+    # 否则 vcruntime_c11_stdatomic.h 直接 C1189（release.yml windows
+    # 腿实证）；/std:c11 由顶层 CMAKE_C_STANDARD=11 统一下发。
+    target_compile_options(airy_canary PRIVATE /W4 /experimental:c11atomics)
 else()
     target_compile_options(airy_canary PRIVATE
         -Wall -Wextra -Wpedantic -Werror=implicit-function-declaration
