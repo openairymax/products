@@ -10,8 +10,8 @@
  * 一次演化 ≤1 模块 / ≤3 文件 / ≤200 行（无 diff 来源可申报
  * unmeasured）；G30 准入：新增函数 ≤150 行、修改后 ≤200 行，
  * -1 表示输入非法（空度量，宿主报错并降级为无灰度），-2 表示
- * 不满足灰度条件（超限，暂不开启）。kill switch 三通道
- * （环境变量 / 文件哨兵 / CLI），
+ * 不满足灰度条件（超限，暂不开启）。kill switch 四通道
+ * （环境变量 / 全局文件 / 实例哨兵 / CLI 持久化），
  * 命中即停止一切自演化写入。base 变化 → manifest 标记待重放，
  * 禁止静默合并。
  *
@@ -118,10 +118,12 @@ int canary_verify(canary_t *c, const uint8_t hash[32]);
  * 返回 1 走演化路径；kill 命中或非灰度态恒 0 */
 int canary_route(canary_t *c, uint32_t salt);
 
-/* kill switch 三通道配置（进程级，须并发前设置；空串=禁用该通道） */
+/* kill switch 四通道配置（进程级，须并发前设置；空串=禁用该通道）：
+ * 通道一 env、通道二全局文件由本组配置；通道三实例哨兵随实例落位；
+ * 通道四 CLI 见 canary_ks_cli() */
 void canary_ks_env(const char *name);
 void canary_ks_file(const char *path);
-/* 三通道探测（TTL 1s 缓存）：宿主低频轮询并据此停止自演化写入 */
+/* 四通道探测（TTL 1s 缓存）：宿主低频轮询并据此停止自演化写入 */
 int canary_ks_hit(canary_t *c, uint64_t now_ms);
 /* CLI 通道：立即熔断并持久化哨兵文件（重启后仍生效），单向 */
 int canary_ks_cli(canary_t *c);
