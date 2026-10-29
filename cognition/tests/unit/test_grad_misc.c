@@ -151,9 +151,13 @@ static void ru_call(grad_llm_ctx_t *ctx, airy_grad_role_e role)
         TEST_FAIL("role usage call", "grad_llm_call failed");
 }
 
-/* C11 契约 fake：捕获最近一次请求配置，finish_reason 可编程。 */
+/* C11 契约 fake：在 complete 调用窗口内按值快照采样要素（llm_cfg 为
+ * grad_llm_call 栈变量，complete 返回后即失效，禁止事后回读指针），
+ * finish_reason 可编程。 */
 typedef struct {
-    const llm_request_config_t *last_cfg;
+    float temperature;
+    bool temperature_set;
+    uint32_t seed;
     const char *finish_reason;
 } c11_fake_t;
 
@@ -163,7 +167,9 @@ static llm_message_t g_c11_choices[1];
 static int c11_fake_complete(void *ctx, const llm_request_config_t *cfg, llm_response_t **out)
 {
     c11_fake_t *f = (c11_fake_t *)ctx;
-    f->last_cfg = cfg;
+    f->temperature = cfg->temperature;
+    f->temperature_set = cfg->temperature_set;
+    f->seed = cfg->seed;
     g_c11_choices[0].role = "assistant";
     g_c11_choices[0].content = "{\"ok\":true}";
     __builtin_memset(&g_c11_resp, 0, sizeof(g_c11_resp));
@@ -195,12 +201,11 @@ void test_grad_c11_contract(void)
         return;
     }
     AIRY_FREE(text);
-    if (fake.last_cfg->temperature == 0.0f && fake.last_cfg->temperature_set &&
-        fake.last_cfg->seed == GRAD_SEED) {
+    if (fake.temperature == 0.0f && fake.temperature_set && fake.seed == GRAD_SEED) {
         TEST_PASS("temp=0 explicit + fixed seed");
     } else {
-        snprintf(msg, sizeof(msg), "temp=%.2f set=%d seed=%u", fake.last_cfg->temperature,
-                 (int)fake.last_cfg->temperature_set, fake.last_cfg->seed);
+        snprintf(msg, sizeof(msg), "temp=%.2f set=%d seed=%u", fake.temperature,
+                 (int)fake.temperature_set, fake.seed);
         TEST_FAIL("c11 sampling", msg);
     }
 
