@@ -21,6 +21,7 @@
 
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
 #define CAN_MKDIR(p) _mkdir(p)
 #else
 #include <sys/stat.h>
@@ -32,16 +33,37 @@
 
 /*
  * 覆盖式改名原子件：src 存在时把 dst 替换为 src，缺位报 ENOENT。
- * POSIX rename 自带原子替换语义；Windows CRT rename 拒绝已存在的
- * dst（run 40975362676 canary_unit 回滚判负实证），须先 remove。
- * 两端 errno 语义一致：src 缺位为 ENOENT，dst 不可写为 EACCES。
+ * POSIX rename 自带原子替换语义。Windows CRT rename 拒绝已存在的 dst
+ * （run 40975362676 canary_unit 回滚判负实证），先 remove 再 rename 虽
+ * 能通过用例，却在两步之间留下「新旧两侧同时缺位」的崩溃窗口——该
+ * 文件是 C4 回滚锚点，窗口内退出即永久失去锚点。改用 MoveFileExA
+ * REPLACE_EXISTING（同卷内由系统一次替换，无中间态），WRITE_THROUGH
+ * 令改名落盘后才返回。Win32 错误码映射回 errno 两值，维持
+ * man_shift/man_restore 的判据语义（src 缺位 ENOENT、不可写 EACCES）。
  */
 static int man_repl(const char *src, const char *dst)
 {
 #ifdef _WIN32
-    remove(dst);
-#endif
+    if (MoveFileExA(src, dst,
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        return 0;
+    switch (GetLastError()) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+        errno = ENOENT;
+        break;
+    case ERROR_ACCESS_DENIED:
+    case ERROR_SHARING_VIOLATION:
+        errno = EACCES;
+        break;
+    default:
+        errno = EIO;
+        break;
+    }
+    return -1;
+#else
     return rename(src, dst);
+#endif
 }
 
 static int man_path(const struct canary_s *c, char *buf, size_t cap,
