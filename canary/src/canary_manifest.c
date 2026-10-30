@@ -7,7 +7,7 @@
  * manifest 落位 <root>/local/evolve/<module>/canary.manifest，行式文本：
  *   module=<name> / state=<态> / base_sha256=<64hex> / created_ms=<ts>
  *   / lines=<n|unmeasured> / fn_new=<n|unmeasured> / fn_mod=<n|unmeasured>
- * 写入经临时文件 + rename 原子生效；采纳前现存 manifest 保留为
+ * 写入经临时文件 + man_repl 覆盖式改名生效；采纳前现存 manifest 保留为
  * .prev（C4 回滚恢复链）；base 哈希失配 → state=replay_pending，
  * 禁止静默合并（标记路径透传原申报，账目不丢失）。
  */
@@ -29,6 +29,20 @@
 
 #define MAN_NAME "canary.manifest"
 #define MAN_PREV "canary.manifest.prev"
+
+/*
+ * 覆盖式改名原子件：src 存在时把 dst 替换为 src，缺位报 ENOENT。
+ * POSIX rename 自带原子替换语义；Windows CRT rename 拒绝已存在的
+ * dst（run 40975362676 canary_unit 回滚判负实证），须先 remove。
+ * 两端 errno 语义一致：src 缺位为 ENOENT，dst 不可写为 EACCES。
+ */
+static int man_repl(const char *src, const char *dst)
+{
+#ifdef _WIN32
+    remove(dst);
+#endif
+    return rename(src, dst);
+}
 
 static int man_path(const struct canary_s *c, char *buf, size_t cap,
                     const char *name)
@@ -137,9 +151,7 @@ int man_write(const struct canary_s *c, const char *state,
     }
     if (fclose(f) != 0)
         return -1;
-    if (remove(path) != 0 && errno != ENOENT)
-        return -1;
-    if (rename(tmp, path) != 0)
+    if (man_repl(tmp, path) != 0)
         return -1;
     return 0;
 }
@@ -226,7 +238,7 @@ int man_shift(const struct canary_s *c)
     if (man_path(c, cur, sizeof(cur), MAN_NAME) != 0 ||
         man_path(c, prev, sizeof(prev), MAN_PREV) != 0)
         return -1;
-    if (rename(cur, prev) != 0 && errno != ENOENT)
+    if (man_repl(cur, prev) != 0 && errno != ENOENT)
         return -1;
     return 0;
 }
@@ -241,7 +253,7 @@ int man_restore(struct canary_s *c)
     if (man_path(c, cur, sizeof(cur), MAN_NAME) != 0 ||
         man_path(c, prev, sizeof(prev), MAN_PREV) != 0)
         return -1;
-    if (rename(prev, cur) == 0)
+    if (man_repl(prev, cur) == 0)
         return 0;
     if (errno != ENOENT)
         return -1;
