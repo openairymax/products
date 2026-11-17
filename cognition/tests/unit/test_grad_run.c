@@ -399,6 +399,25 @@ void test_run_schema(void)
     TEST_PASS("schema 违例单轮失败并携带字段级详情");
 }
 
+/* C8 判据②：无 seed + schema 合法计划 → 收敛（对照①的确定性失败）。 */
+void test_run_nsok(void)
+{
+    gr_fake_t f = {.a_json = GR_PLAN_OK, .b_json = GR_ACC};
+    airy_grad_outcome_t oc;
+    airy_err_t err = gr_exec(&f, 0, NULL, &oc);
+    TEST_CHECK(err == AIRY_SUCCESS, "legal plan must converge");
+    TEST_CHECK(oc.converged == 1, "converged flag set");
+    TEST_CHECK(oc.stats.status == GRAD_STATUS_CONVERGED, "status must be converged");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_NONE, "stage must be none on clean pass");
+    TEST_CHECK(f.a_calls == 1, "skeleton generated once");
+    TEST_CHECK(f.b_calls == 1, "model B must arbitrate once");
+    TEST_CHECK(oc.detail_index == -1, "no detail without a failure");
+    TEST_CHECK(oc.final_plan != NULL, "converged plan must be released");
+    if (oc.final_plan)
+        free_plan(oc.final_plan);
+    TEST_PASS("无 seed 合法计划收敛");
+}
+
 /* C-8 回退开关：AIRY_GRAD_FALLBACK_AS_SEED=1 恢复旧降级路径（fallback
  * 占位），但降级产物仍被 P1 前缀守卫拦在批判门外（fail-closed）。 */
 void test_run_fbseed(void)
