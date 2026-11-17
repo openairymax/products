@@ -240,6 +240,65 @@ static const airy_task_node_t *grad_node_find(const airy_task_plan_t *plan, cons
     return NULL;
 }
 
+/* 字符串集合等价（depends/inputs/outputs 顺序不承载语义） */
+static int grad_set_eq(char *const *a, size_t an, char *const *b, size_t bn)
+{
+    if (an != bn)
+        return 0;
+    for (size_t i = 0; i < an; i++) {
+        const char *s = a[i] ? a[i] : "";
+        int hit = 0;
+        for (size_t j = 0; j < bn; j++) {
+            if (strcmp(s, b[j] ? b[j] : "") == 0) {
+                hit = 1;
+                break;
+            }
+        }
+        if (!hit)
+            return 0;
+    }
+    return 1;
+}
+
+static int grad_str_eq(const char *a, const char *b)
+{
+    return strcmp(a ? a : "", b ? b : "") == 0;
+}
+
+/**
+ * @brief C-8 做法③：修补轮产物与旧计划结构等价 → 本轮 patch 为空。
+ *
+ * 空 patch 本身就是零信息增益，不应再消耗下一轮生成与四验。节点按 id
+ * 对齐（顺序不承载语义），depends/inputs/outputs 按集合比较。
+ */
+static int grad_plan_same(const airy_task_plan_t *a, const airy_task_plan_t *b)
+{
+    if (!a || !b || a->task_plan_node_count != b->task_plan_node_count)
+        return 0;
+    for (size_t i = 0; i < a->task_plan_node_count; i++) {
+        const airy_task_node_t *x = a->task_plan_nodes[i];
+        if (!x)
+            return 0;
+        const airy_task_node_t *y = grad_node_find(b, x->task_node_id);
+        if (!y)
+            return 0;
+        if (!grad_str_eq(x->task_node_goal, y->task_node_goal) ||
+            !grad_str_eq(x->task_node_agent_role, y->task_node_agent_role))
+            return 0;
+        if (!grad_set_eq(x->task_node_depends_on, x->task_node_depends_count,
+                         y->task_node_depends_on, y->task_node_depends_count) ||
+            !grad_set_eq(x->task_node_inputs, x->task_node_inputs_count,
+                         y->task_node_inputs, y->task_node_inputs_count) ||
+            !grad_set_eq(x->task_node_outputs, x->task_node_outputs_count,
+                         y->task_node_outputs, y->task_node_outputs_count))
+            return 0;
+        if (x->task_node_cost_time_ms != y->task_node_cost_time_ms ||
+            x->task_node_cost_mem_mb != y->task_node_cost_mem_mb)
+            return 0;
+    }
+    return 1;
+}
+
 /** @brief A/B 共享的轮次历史环（保留最近 GRAD_ARBITER_MAX_HISTORY 条）。 */
 typedef struct grad_hist_ring {
     grad_round_hist_t e[GRAD_ARBITER_MAX_HISTORY];
@@ -699,6 +758,8 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
     /* C13 决策③：A/B 共享的失败轮次环（仅 C 失败轮入环，J-16 依据末两条） */
     grad_hist_ring_t hist;
     __builtin_memset(&hist, 0, sizeof(hist));
+    /* C-8 做法③：当前轮计划是否由空 patch 产生（J-16 新增判定键） */
+    int patch_empty = 0;
     uint32_t k = 0;
     for (k = 0; k < coord->config.max_iterations; k++) {
         grad_pmode_t pmode = GRAD_PATCH_C;
@@ -896,12 +957,23 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             break;
         }
 
-        if (no_prog) {
-            /* J-16：连续两轮缺陷码序列与修补范围完全相同 → 修复环已无信息
-             * 增益，fail-closed 停止（不发第 3 轮），交上层人工/策略处置。 */
+        if (no_prog || patch_empty) {
             coord->stats.stopped = 1;
-            AIRY_LOG_WARN("GRAD: no progress between consecutive rounds, stop (J-16)");
-            grad_progress(coord, 0, "grad_no_progress", "{\"action\":\"stop\"}");
+            if (patch_empty) {
+                /* C-8 做法③：空 patch 本身就是无信息增益，第 2 轮即停并判
+                 * degraded（区别于缺陷重复导致的 J-16 无进展）。 */
+                coord->stats.degraded = 1;
+                AIRY_LOG_WARN("GRAD: empty patch in round %u (no plan change), "
+                              "stop (J-16)",
+                              (unsigned)k);
+                grad_progress(coord, 0, "grad_no_progress",
+                              "{\"action\":\"stop\",\"reason\":\"empty_patch\"}");
+            } else {
+                /* J-16：连续两轮缺陷码序列与修补范围完全相同 → 修复环已无
+                 * 信息增益，fail-closed 停止（不发第 3 轮），交上层人工/策略处置。 */
+                AIRY_LOG_WARN("GRAD: no progress between consecutive rounds, stop (J-16)");
+                grad_progress(coord, 0, "grad_no_progress", "{\"action\":\"stop\"}");
+            }
             if (round.patch_json) {
                 AIRY_FREE(round.patch_json);
                 round.patch_json = NULL;
@@ -956,6 +1028,10 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             }
             new_plan = merged;
         }
+
+        /* C-8 做法③：本轮修补产物与旧计划结构等价 = 空 patch（零信息增益）。
+         * 作为 J-16 新增判定键，交给本轮验证后的停止判定消费（第 2 轮即停）。 */
+        patch_empty = grad_plan_same(plan, new_plan);
 
         if (plan_owned)
             airy_task_plan_free(plan);

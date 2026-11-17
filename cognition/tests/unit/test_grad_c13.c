@@ -376,7 +376,8 @@ void test_c13_budget_skip(void)
     TEST_PASS("budget exhaustion skips failure arbitration");
 }
 
-/* J-16：连续两轮 (E-02, ∅) → 无进展即停，fail-closed */
+/* J-16：连续两轮 (E-02, ∅) → 无进展即停，fail-closed。修补轮返回与旧
+ * 计划等价的内容即空 patch（C-8 做法③），同样命中 J-16 并判 degraded。 */
 void test_c13_j16_stop(void)
 {
     c13_rig_t rig;
@@ -386,6 +387,7 @@ void test_c13_j16_stop(void)
 
     TEST_CHECK(rig.stats.stopped == 1, "J-16 must stop the loop");
     TEST_CHECK(rig.stats.total_rounds == 2, "stopped run counts two rounds");
+    TEST_CHECK(rig.stats.degraded == 1, "empty patch must mark degraded");
     TEST_CHECK(rig.err == AIRY_ETIMEDOUT, "fail-closed returns ETIMEDOUT");
     TEST_CHECK(rig.final == NULL, "defective plan must not leak out");
     TEST_CHECK(rig.stats.converged == 0, "must not be converged");
