@@ -27,6 +27,7 @@
 #include "logging.h"
 #include "airy_memory.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *seed_plan,
@@ -35,6 +36,8 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     if (!launch || !out_outcome)
         return AIRY_EINVAL;
     __builtin_memset(out_outcome, 0, sizeof(*out_outcome));
+    /* C-8：detail_index 缺省 -1 表示"无字段级详情"（0 是合法节点下标）。 */
+    out_outcome->detail_index = -1;
     /* C7（0.1.20）：终态先置 fail-closed——枚举 0 即 converged，任何
      * 早退/装配失败路径都不得被误读为"已收敛"（fail-safe by default）。 */
     out_outcome->stats.status = GRAD_STATUS_FAIL_CLOSED;
@@ -74,6 +77,11 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
     /* 0.1.20 T3/T4：增量 patch 与流式位经 launch 快照透传（0 缺省安全）。 */
     grad_ctx.incremental_patch = launch->incremental_patch ? 1u : 0u;
     grad_ctx.stream = launch->stream ? 1 : 0;
+    /* C-8 回退开关：文档键 grad.fallback_as_seed，进程环境名按项目约定
+     * 大写并加 AIRY_ 前缀；缺省 0（生成失败即 ESERVICE，禁止 fallback
+     * 顶替初始计划），置 1 恢复旧降级行为仅用于对比实验。 */
+    const char *fb_env = getenv("AIRY_GRAD_FALLBACK_AS_SEED");
+    grad_ctx.fallback_as_seed = (fb_env && fb_env[0] == '1') ? 1 : 0;
     /* 0.1.20 C12：n_ctx_slot=0 时域关闭（回滚开关；D2-9 接线真实源）。
      * 并发闸为进程级单例，daemon prepare 期单线程先行，此处防御性幂等。 */
     grad_ctx.max_concurrent = launch->max_concurrent;
@@ -130,6 +138,18 @@ airy_err_t grad_run(const airy_grad_launch_t *launch, const airy_task_plan_t *se
 
     out_outcome->converged = grad_stats.converged;
     out_outcome->stats = grad_stats;
+    /* C-8 做法①：生成/解析失败导出的 {index, field, reason} 随失败一并
+     * 交调用方，调用方据此定位违例字段而非只能看到笼统错误码。 */
+    if (grad_ctx.last_detail_set) {
+        out_outcome->detail_index = grad_ctx.last_detail.index;
+        snprintf(out_outcome->detail_field, sizeof(out_outcome->detail_field), "%s",
+                 grad_ctx.last_detail.field);
+        snprintf(out_outcome->detail_reason, sizeof(out_outcome->detail_reason), "%s",
+                 grad_ctx.last_detail.reason);
+    }
+    /* C-8 做法③：空 patch 停止由协调器判 degraded，此处并入终态申报。 */
+    if (grad_stats.degraded)
+        out_outcome->degraded = 1;
 
     /* E5（0.1.20）：stats.cached_tokens 聚合 = 分角色 cached 求和（与
      * prompt/completion 同口径，事件流与 trace 共用单一来源）。 */

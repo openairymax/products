@@ -29,6 +29,8 @@
 #include "test_grad_internal.h"
 #include "grad_strategy.h"
 
+#include <stdlib.h>
+
 /* B 终裁：高置信 accept（θ_B 之上，直接采纳）。 */
 #define GR_ACC "{\"verdict\":\"accept\",\"confidence\":0.95}"
 /* B 终裁：非法 verdict 值 → 契约违例（b_invalid 路径）。 */
@@ -55,6 +57,10 @@
     "{\"id\":\"S_02\",\"goal\":\"b\",\"role\":\"act\",\"depends\":[\"S_01\"],"   \
     "\"outputs\":[\"b.out\"],\"cost_time_ms\":10}"                              \
     "],\"entry\":[\"S_01\"]}"
+/* A 计划：role 非合法枚举 → schema 违例（C-8：无 seed 首轮确定性失败）。 */
+#define GR_PLAN_BADROLE                                                         \
+    "{\"nodes\":[{\"id\":\"S_01\",\"goal\":\"execute\",\"role\":\"executor\","  \
+    "\"outputs\":[\"seed.done\"],\"cost_time_ms\":10}],\"entry\":[\"S_01\"]}"
 
 /* LLM 补全闭包替身：按 system prompt 分流 A/B，返回预置 JSON 与终结因。
  * a_seq 非空时按 A 调用序取计划（多轮序列），否则恒用 a_json。 */
@@ -370,4 +376,42 @@ void test_run_exh(void)
     TEST_CHECK(f.b_calls == 0, "non-E-04 failures must not call B");
     TEST_CHECK(oc.final_plan == NULL, "unverified plan must not be released");
     TEST_PASS("迭代耗尽申报 fail_closed + loop");
+}
+
+/* 路径 11（C8 判据①）：无 seed + schema 违例 → 1 轮内确定性失败，错误
+ * 携带字段级详情 {index, field, reason}；不调用 B、不产出计划、不降级。 */
+void test_run_schema(void)
+{
+    gr_fake_t f = {.a_json = GR_PLAN_BADROLE, .b_json = GR_ACC};
+    airy_grad_outcome_t oc;
+    airy_err_t err = gr_exec(&f, 0, NULL, &oc);
+    TEST_CHECK(err == AIRY_ESERVICE, "schema violation must fail as service error");
+    TEST_CHECK(oc.stats.status == GRAD_STATUS_FAIL_CLOSED, "status must be fail_closed");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_GEN, "schema violation attributes to gen");
+    TEST_CHECK(oc.stats.converged == 0, "must not converge");
+    TEST_CHECK(oc.stats.degraded == 0, "explicit failure is not a degraded run");
+    TEST_CHECK(f.a_calls == 1, "fail within the first round (single A call)");
+    TEST_CHECK(f.b_calls == 0, "schema violation must not call B");
+    TEST_CHECK(oc.detail_index == 0, "detail must point at the violating node");
+    TEST_CHECK(strcmp(oc.detail_field, "role") == 0, "detail field must be role");
+    TEST_CHECK(strcmp(oc.detail_reason, "enum") == 0, "detail reason must be enum");
+    TEST_CHECK(oc.final_plan == NULL, "no plan may be released");
+    TEST_PASS("schema 违例单轮失败并携带字段级详情");
+}
+
+/* C-8 回退开关：AIRY_GRAD_FALLBACK_AS_SEED=1 恢复旧降级路径（fallback
+ * 占位），但降级产物仍被 P1 前缀守卫拦在批判门外（fail-closed）。 */
+void test_run_fbseed(void)
+{
+    setenv("AIRY_GRAD_FALLBACK_AS_SEED", "1", 1);
+    gr_fake_t f = {.a_json = GR_PLAN_BADROLE, .b_json = GR_ACC};
+    airy_grad_outcome_t oc;
+    airy_err_t err = gr_exec(&f, 0, NULL, &oc);
+    unsetenv("AIRY_GRAD_FALLBACK_AS_SEED");
+    TEST_CHECK(err == AIRY_EFAIL, "legacy fallback must be rejected by P1");
+    TEST_CHECK(oc.degraded == 1, "legacy fallback marks degraded");
+    TEST_CHECK(oc.stats.stage == GRAD_STAGE_GEN, "fallback attributes to gen");
+    TEST_CHECK(f.a_calls == 1, "fallback avoids further A calls");
+    TEST_CHECK(oc.final_plan == NULL, "fallback must not leak out");
+    TEST_PASS("回退开关恢复旧降级路径但仍 fail-closed");
 }

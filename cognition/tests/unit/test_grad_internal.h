@@ -168,5 +168,7 @@ void test_run_nollm(void);
 void test_run_bgone(void);
 void test_run_bbad(void);
 void test_run_exh(void);
+void test_run_schema(void);
+void test_run_fbseed(void);
 
 #endif /* TEST_GRAD_INTERNAL_H */
