@@ -427,6 +427,14 @@ typedef struct grad_llm_ctx {
     int fallback_as_seed;
     grad_detail_t last_detail;
     int last_detail_set;
+
+    /* C-9（0.1.21，尾部追加）：响应提取剥围栏开关与同字段复发计数。
+     * fence_strip_off=0（默认）：cJSON_Parse 前剥离 ```json 围栏、首尾
+     * 空白与 JSON 外解释文字；=1 原文直送解析器（仅回退对比实验）。
+     * detail_repeat=1 表示上一轮与再上一轮同 {field} 违例，修补 prompt
+     * 追加格式强化段。 */
+    int fence_strip_off;
+    int detail_repeat;
 } grad_llm_ctx_t;
 
 /**
@@ -507,6 +515,28 @@ void grad_ctxb_sem_release(void);
 airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *user,
                          const char *model, airy_grad_role_e role, char **out_text,
                          size_t *out_len);
+
+/* C-9（0.1.21）：响应提取——剥 ```json 围栏、首尾空白与 JSON 外解释
+ * 文字。返回新分配串（OWNER，调用方 AIRY_FREE）；*stripped 置 1 表示
+ * 发生过剥离。无 JSON 结构时按原文 trim 返回，由 cJSON_Parse 归因。 */
+char *grad_extract_json_body(const char *text, size_t len, size_t *out_len, int *stripped);
+
+/* C-9：模型 A 系统提示内嵌的最小合法样例（SSoT——prompt 与样例自检
+ * 共用同一字面量；任一改动必须同时通过 grad_plan_schema_validate）。
+ * LIT：单节点 + lit: 输入；CHAIN：两节点 + producer 链输入。 */
+#define GRAD_S2_SAMPLE_LIT_JSON                                                 \
+    "{\"nodes\":[{\"id\":\"S_01\",\"goal\":\"collect facts\","                  \
+    "\"role\":\"retrieve\",\"depends\":[],\"inputs\":[\"lit:seed\"],"           \
+    "\"outputs\":[\"facts\"],\"cost_time_ms\":2000}],\"entry\":[\"S_01\"]}"
+#define GRAD_S2_SAMPLE_CHAIN_JSON                                               \
+    "{\"nodes\":["                                                              \
+    "{\"id\":\"S_01\",\"goal\":\"collect facts\",\"role\":\"retrieve\","        \
+    "\"depends\":[],\"inputs\":[\"lit:seed\"],\"outputs\":[\"facts\"],"         \
+    "\"cost_time_ms\":2000},"                                                   \
+    "{\"id\":\"S_02\",\"goal\":\"write report\",\"role\":\"act\","              \
+    "\"depends\":[\"S_01\"],\"inputs\":[\"S_01.facts\"],\"outputs\":[\"report\"]," \
+    "\"cost_time_ms\":3000}"                                                    \
+    "],\"entry\":[\"S_01\"]}"
 
 /* grad_llm_s2_plan.c — 模型 A 计划生成域 */
 char *grad_goal_to_json(const airy_gccp_goal_t *goal, const grad_llm_ctx_t *ctx);
