@@ -642,18 +642,28 @@ static int grad_closure_impl(const airy_task_plan_t *plan, const char *const *sc
  * @brief E-04 purpose-drift guard check (deterministic, 0.1.20 C5).
  *
  * Extracts lowercased keywords from the goal endpoint text and requires
- * every invariant_guard node's outputs to share entity overlap with at
- * least one keyword (bidirectional substring match). A guard node whose
- * outputs mention nothing the goal mentions protects entities the goal
- * never asked for — purpose drift. Without a goal (or without keywords
- * or guard nodes) the check is not applicable: guard_state = NONE, and
- * only invariant_guards counting remains (semantic layer B still owns
- * the fine-grained e04=pass|fail verdict).
+ * every judgeable invariant_guard node's outputs to share entity overlap
+ * with at least one keyword (bidirectional substring match). A guard node
+ * whose outputs mention nothing the goal mentions protects entities the
+ * goal never asked for — purpose drift. `artifact:` signatures are
+ * references, not artifact names, so they are not judgeable evidence:
+ * when no guard node carries a real signature the verdict is SKIP
+ * (guard_state = NONE, n_degraded++) rather than FAIL — rejecting here
+ * would fail closed on missing evidence instead of on real drift.
+ * Without a goal (or without keywords or guard nodes) the check is not
+ * applicable: guard_state = NONE, and only invariant_guards counting
+ * remains (semantic layer B still owns the fine-grained verdict).
  *
  * Whole-graph domain (E-03 alike): drift is a plan-level property, so
  * scope mode still inspects every guard node (fail-closed).
  */
 #define GUARD_KW_MAX 24
+
+/* `artifact:` 前缀是产物引用签名，不承载可比较的产物名。 */
+static int grad_ref_sig(const char *sig)
+{
+    return strncmp(sig, "artifact:", 9) == 0;
+}
 
 static void grad_check_guard(const airy_task_plan_t *plan, const airy_gccp_goal_t *goal,
                              airy_grad_report_t *report)
@@ -665,16 +675,19 @@ static void grad_check_guard(const airy_task_plan_t *plan, const airy_gccp_goal_
     size_t kw_count = airy_text_keywords(goal->goal_endpoint, keywords, GUARD_KW_MAX);
     if (kw_count == 0)
         return;
+    size_t judged = 0;
     int fail = 0;
     for (size_t i = 0; i < plan->task_plan_node_count && !fail; i++) {
         airy_task_node_t *node = plan->task_plan_nodes[i];
         if (!node || !node->task_node_invariant_guard)
             continue;
         int overlap = 0;
+        int weighable = 0;
         for (size_t o = 0; o < node->task_node_outputs_count && !overlap; o++) {
             const char *sig = node->task_node_outputs[o];
-            if (!sig || !sig[0])
+            if (!sig || !sig[0] || grad_ref_sig(sig))
                 continue;
+            weighable = 1;
             for (size_t k = 0; k < kw_count; k++) {
                 if (strstr(sig, keywords[k]) || strstr(keywords[k], sig)) {
                     overlap = 1;
@@ -682,6 +695,9 @@ static void grad_check_guard(const airy_task_plan_t *plan, const airy_gccp_goal_
                 }
             }
         }
+        if (!weighable)
+            continue;
+        judged++;
         if (!overlap) {
             snprintf(report->affected_node, sizeof(report->affected_node), "%s",
                      node->task_node_id ? node->task_node_id : "?");
@@ -690,6 +706,10 @@ static void grad_check_guard(const airy_task_plan_t *plan, const airy_gccp_goal_
         }
     }
     airy_text_kw_free(keywords, kw_count);
+    if (judged == 0) {
+        report->n_degraded++;
+        return;
+    }
     report->guard_state = fail ? AIRY_GRAD_GUARD_FAIL : AIRY_GRAD_GUARD_PASS;
 }
 
@@ -884,13 +904,14 @@ airy_err_t airy_grad_report_to_json(const airy_grad_report_t *report, char **out
                      "\"cost_sum_ms\":%lld,\"cost_sum_mb\":%lld,\"checked_nodes\":%u,"
                      "\"skipped_nodes\":%u,\"invariant_guards\":%u,\"errors\":%u,"
                      "\"causal_checked\":%u,\"cost_checked\":%u,\"metadata_ok\":%u,"
-                     "\"guard_state\":%u}",
+                     "\"guard_state\":%u,\"n_degraded\":%u}",
                      (int)report->error, airy_grad_error_str(report->error), report->affected_node,
                      (long long)report->cost_sum_ms, (long long)report->cost_sum_mb,
                      (unsigned)report->checked_nodes, (unsigned)report->skipped_nodes,
                      (unsigned)report->invariant_guards, (unsigned)report->errors,
                      (unsigned)report->causal_checked, (unsigned)report->cost_checked,
-                     (unsigned)report->metadata_ok, (unsigned)report->guard_state);
+                     (unsigned)report->metadata_ok, (unsigned)report->guard_state,
+                     (unsigned)report->n_degraded);
     if (n <= 0 || (size_t)n >= cap) {
         AIRY_FREE(buf);
         return AIRY_EUNKNOWN;
