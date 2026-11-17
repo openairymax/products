@@ -140,18 +140,35 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
 
 /**
  * @brief Parse plan JSON into airy_task_plan_t (with GRAD verification metadata).
+ *
+ * C-8：detail 非 NULL 时导出字段级失败详情（index=-1 表示整份结构错误）。
  */
-airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
-                                airy_task_plan_t **out_plan)
+static void grad_detail_set(grad_detail_t *detail, int index, const char *field,
+                            const char *reason)
 {
-    if (!json || !out_plan)
+    if (!detail)
+        return;
+    detail->index = index;
+    snprintf(detail->field, sizeof(detail->field), "%s", field ? field : "");
+    snprintf(detail->reason, sizeof(detail->reason), "%s", reason ? reason : "");
+}
+
+airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
+                                   airy_task_plan_t **out_plan, grad_detail_t *detail)
+{
+    grad_detail_set(detail, -1, "", "");
+    if (!json || !out_plan) {
+        grad_detail_set(detail, -1, "json", "invalid argument");
         return AIRY_EINVAL;
+    }
     *out_plan = NULL;
 
 #ifdef AIRY_HAS_CJSON
     cJSON *root = cJSON_Parse(json);
-    if (!root)
+    if (!root) {
+        grad_detail_set(detail, -1, "json", "syntax");
         return AIRY_ESERVICE;
+    }
 
     /* C1：schema 校验前置——违例整份拒绝（EINVAL），不静默修复。
      * s2_plan 侧对 EINVAL 走保守 fallback（q8a 语义），修复环不中断；
@@ -164,29 +181,34 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
     if (grad_plan_schema_validate(root, eff_id, &serr) != AIRY_SUCCESS) {
         AIRY_LOG_WARN("GRAD-A: plan schema violation (node=%d field=%s reason=%s)",
                       serr.index, serr.field, serr.reason);
+        grad_detail_set(detail, serr.index, serr.field, serr.reason);
         cJSON_Delete(root);
         return AIRY_EINVAL;
     }
 
     cJSON *nodes = cJSON_GetObjectItem(root, "nodes");
     if (!cJSON_IsArray(nodes)) {
+        grad_detail_set(detail, -1, "nodes", "not_array");
         cJSON_Delete(root);
         return AIRY_ESERVICE;
     }
     size_t n = (size_t)cJSON_GetArraySize(nodes);
     if (n == 0) {
+        grad_detail_set(detail, -1, "nodes", "empty");
         cJSON_Delete(root);
         return AIRY_ESERVICE;
     }
 
     airy_task_plan_t *plan = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
     if (!plan) {
+        grad_detail_set(detail, -1, "plan", "alloc");
         cJSON_Delete(root);
         return AIRY_ENOMEM;
     }
     plan->task_plan_id = AIRY_STRDUP(eff_id);
     plan->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(n, sizeof(airy_task_node_t *));
     if (!plan->task_plan_nodes) {
+        grad_detail_set(detail, -1, "plan", "alloc");
         AIRY_FREE(plan->task_plan_id);
         AIRY_FREE(plan);
         cJSON_Delete(root);
@@ -371,6 +393,12 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
     *out_plan = plan;
     return AIRY_SUCCESS;
 #endif
+}
+
+airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
+                                airy_task_plan_t **out_plan)
+{
+    return grad_parse_plan_json_ex(json, plan_id, out_plan, NULL);
 }
 
 /* 保守降级计划：单节点空壳，以 "fallback_" 前缀标记（engine 采纳前拒绝）。
