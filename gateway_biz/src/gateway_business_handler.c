@@ -280,6 +280,11 @@ char *gateway_business_handle(void *request, void *user_data)
             resp = (strcmp(cap->method, "run") == 0) ? handle_agent_run(root, ctx)
                                                      : handle_agent_cancel(root, ctx);
             break;
+        case GW_CAP_KIND_TASK_SUBMIT:
+            /* 流式分支由 SSE 端点（/api/v1/agent/run/stream）直接下发帧，
+             * 不走业务分派；此处只承载同步 task.submit。 */
+            resp = handle_task_submit(root, ctx);
+            break;
         case GW_CAP_KIND_LLM_LIST:
             resp = handle_llm_list_models(root, ctx);
             break;
