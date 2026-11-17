@@ -121,7 +121,8 @@ typedef struct airy_grad_report {
     uint32_t causal_checked; /**< E-01 受检节点数（空 inputs 平凡通过亦计） */
     uint32_t cost_checked;   /**< E-03 参与守恒累计节点数（不再污染 checked_nodes） */
     uint32_t metadata_ok;    /**< 元数据完备节点数（见 airy_grad_verify_plan_g） */
-    uint8_t guard_state;     /**< airy_grad_guard_state_t（goal 缺席 = NONE） */
+    uint8_t guard_state;     /**< airy_grad_guard_state_t（goal 缺席或无真实产物名 = NONE） */
+    uint32_t n_degraded;     /**< 证据缺失判 SKIP 的判据次数（不计 PASS，见 E-04） */
 } airy_grad_report_t;
 
 /**
