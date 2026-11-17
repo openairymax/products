@@ -732,6 +732,10 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
             AIRY_LOG_ERROR("GRAD: S2 skeleton generation failed (err=%d)", (int)err);
             coord->stats.stage = GRAD_STAGE_GEN;
             coord->active = 0;
+            /* C-8：终态归因不得因早退丢失——stats 必须与错误码一同上报，
+             * 否则调用方只见错误码、stage 归 NONE（读起来像"全链通过"）。 */
+            if (out_stats)
+                *out_stats = coord->stats;
             return err ? err : AIRY_ESERVICE;
         }
         plan_owned = 1;
