@@ -464,10 +464,24 @@ static airy_err_t grad_fail_arb(airy_grad_coordinator_t *coord, const airy_gccp_
                  grad_arb_fail_parse(verdict, plan, &f) == AIRY_SUCCESS;
     AIRY_FREE(verdict);
     if (!parsed) {
-        /* B 超时/非 JSON/契约违例：回退 C 模板 patch，不阻塞修复环 */
+        /* C-10（0.1.21）：B 不可用与"裁决不合契约"分开记账。err=0 只允许
+         * 表示 B 给出了可解析的裁决，不得用来表示"仲裁不可用"；回退 C 模板
+         * patch 是显式降级（status=unusable），不是静默成功。 */
+        int unusable = (aerr != AIRY_SUCCESS);
+        if (unusable)
+            coord->stats.arbiter_unavailable++;
+        else
+            coord->stats.arbiter_invalid++;
         coord->stats.arbiter_internal_error++;
-        AIRY_LOG_WARN("GRAD-B: failure arbitration unusable (err=%d), C patch kept", (int)aerr);
-        grad_progress(coord, 0, "grad_arbiter_failure_error", "{\"fallback\":\"c_patch\"}");
+        coord->stats.stage = GRAD_STAGE_ARBITER;
+        AIRY_LOG_WARN("GRAD-B: failure arbitration %s (err=%d), C patch kept",
+                      unusable ? "unavailable" : "verdict invalid", (int)aerr);
+        char ev[256];
+        snprintf(ev, sizeof(ev),
+                 "{\"fallback\":\"c_patch\",\"status\":\"unusable\",\"err\":%d,"
+                 "\"affected_node\":\"%s\",\"round\":%u}",
+                 (int)aerr, report->affected_node[0] ? report->affected_node : "", (unsigned)k);
+        grad_progress(coord, 0, "grad_arbiter_failure_error", ev);
         return AIRY_SUCCESS;
     }
 
@@ -803,6 +817,11 @@ airy_err_t airy_grad_coordinator_execute(airy_grad_coordinator_t *coord,
 
         /* scope 复用窗口关闭：本轮验证已消费，下一轮 scope 由本轮裁定重填 */
         grad_scope_free(&delta_scope, &delta_scope_count);
+
+        /* C-10（0.1.21）：节点级归因随每轮验证刷新——stage 说哪一步，
+         * affected_node 说哪个节点；跨层错误 data 直接取此处，不另设来源。 */
+        snprintf(coord->stats.affected_node, sizeof(coord->stats.affected_node), "%s",
+                 report.affected_node);
 
         airy_grad_round_t round;
         __builtin_memset(&round, 0, sizeof(round));
