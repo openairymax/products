@@ -16,9 +16,11 @@
  * decision chain without owning the in-process hall handle.
  *
  * Event ordering: files are named {tenant}.{task}.{category}.{ts_utc}.{seq}.json;
- * within one writer process gseq gives the true causal order, but across
- * processes gseq restarts, so the stable global order is (ts_utc, seq)
- * (ts_utc is UTC YYYYMMDDTHHMMSSmmm, fixed-width, lexicographically ordered).
+ * seq counts within one category directory, so it is not a global order key.
+ * gseq is the ledger-wide monotonic write counter and resumes from a persisted
+ * watermark across process restarts, so the replay/stream order is
+ * (ts_utc, gseq) — with seq as the fallback for legacy files lacking gseq.
+ * ts_utc is UTC YYYYMMDDTHHMMSSmmm (fixed width, lexicographically ordered).
  *
  * Methods:
  *   hall.board   ()                        -> {entries, agents}
@@ -91,7 +93,8 @@ static char *gw_hall_respond(const cJSON *id, cJSON *result)
 
 typedef struct {
     char ts_utc[HALL_EVT_TS_LEN]; /* sort key 1 (fixed width, lexical) */
-    unsigned long seq;            /* sort key 2 */
+    unsigned long seq;            /* per-category counter (legacy fallback) */
+    unsigned long long gseq;      /* sort key 2: ledger-wide write order */
     char *json;                   /* compact event JSON (OWNER) */
 } gw_hall_evt_t;
 
@@ -117,7 +120,7 @@ static int gw_hall_evt_reserve(gw_hall_evt_list_t *l, size_t extra)
 }
 
 static void gw_hall_evt_push(gw_hall_evt_list_t *l, const char *ts_utc, unsigned long seq,
-                             char *json)
+                             unsigned long long gseq, char *json)
 {
     if (gw_hall_evt_reserve(l, 1) != 0) {
         AIRY_FREE(json);
@@ -126,22 +129,32 @@ static void gw_hall_evt_push(gw_hall_evt_list_t *l, const char *ts_utc, unsigned
     gw_hall_evt_t *e = &l->items[l->count++];
     AIRY_STRNCPY_TERM(e->ts_utc, ts_utc ? ts_utc : "", sizeof(e->ts_utc));
     e->seq = seq;
+    e->gseq = gseq;
     e->json = json;
 }
 
-/* insertion sort by (ts_utc, seq) — hall event counts are small (KBs) */
+/* Ordering: (ts_utc, gseq). gseq is the ledger-wide write counter, so it is
+ * the only key that orders events written into different category
+ * directories within the same millisecond. Legacy files without gseq fall
+ * back to their per-directory seq (still correct within one category). */
+static int gw_hall_evt_before(const gw_hall_evt_t *a, const gw_hall_evt_t *b)
+{
+    int c = strcmp(a->ts_utc, b->ts_utc);
+    if (c != 0)
+        return c < 0;
+    unsigned long long ga = a->gseq ? a->gseq : (unsigned long long)a->seq;
+    unsigned long long gb = b->gseq ? b->gseq : (unsigned long long)b->seq;
+    return ga < gb;
+}
+
+/* insertion sort by (ts_utc, gseq) — hall event counts are small (KBs) */
 static void gw_hall_evt_sort(gw_hall_evt_list_t *l)
 {
     for (size_t i = 1; i < l->count; i++) {
         gw_hall_evt_t key = l->items[i];
         size_t j = i;
-        while (j > 0) {
-            int c = strcmp(l->items[j - 1].ts_utc, key.ts_utc);
-            if (c > 0 || (c == 0 && l->items[j - 1].seq > key.seq))
-                j--;
-            else
-                break;
-        }
+        while (j > 0 && gw_hall_evt_before(&key, &l->items[j - 1]))
+            j--;
         if (j != i) {
             for (size_t k = i; k > j; k--)
                 l->items[k] = l->items[k - 1];
@@ -177,7 +190,9 @@ static int gw_hall_collect_file(const char *path, const char *name, gw_hall_evt_
     char *json = hall_event_flatten(path);
     if (!json)
         return -1;
-    gw_hall_evt_push(out, ts_utc, hall_evt_seq(name), json);
+    /* gseq lives in the file header; flatten() puts it ahead of `content`, so
+     * the ledger-wide write counter is available without a second parse. */
+    gw_hall_evt_push(out, ts_utc, hall_evt_seq(name), hall_evt_gseq_of(json), json);
     return 0;
 }
 
