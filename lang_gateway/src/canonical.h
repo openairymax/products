@@ -32,6 +32,10 @@ extern "C" {
  * 或字面量（B6-1）。越界一律显式拒绝（fail-fast），不得静默截断。 */
 #define AIRY_LANG_PROFILE_MAX 32
 
+/* 样本充足阈值（D-3）：每族至少 2 对中英样本（主样本 + 备用样本）才判定
+ * 统计有效；不足时不伪造置信度，显式标注「样本不足（N<阈值）」。 */
+#define AIRY_LANG_MIN_SAMPLES 2
+
 /* 路由阈值默认值（SSoT，B6-3）：画像未携带阈值（ratio_high/ratio_low <= 0）
  * 时 lang_router 的回退值，亦是新画像产出时的种子默认。全部消费方必须
  * 引用本宏，路由禁止硬编码阈值字面量。 */
@@ -51,8 +55,10 @@ struct airy_lang_gateway {
 
     airy_mtx_t prof_lock;
 
-    /* 模型画像（model_id → profile） */
+    /* 模型画像（model_id → profile）。prof_samples 与 profiles 同下标，
+     * 记录该画像所属 family 的实际样本对数（D-3 的可观测事实源）。 */
     airy_model_profile_t profiles[AIRY_LANG_PROFILE_MAX];
+    uint32_t prof_samples[AIRY_LANG_PROFILE_MAX];
     size_t profile_count;
 
     /* 指令计数（周期性重校准触发） */
@@ -91,6 +97,18 @@ uint32_t airy_lang_ascii_count(const char *text);
  * load 返回 AIRY_EOK / AIRY_EINVAL（坏 JSON）/ AIRY_EOVERFLOW（越界整批拒绝）。 */
 int profiles_load(struct airy_lang_gateway *gw);
 int profiles_save(struct airy_lang_gateway *gw);
+
+/* 画像写入并同时登记样本数（公开 set_profile 无样本上下文，登记 0 =
+ * 来源未知，统计侧按样本不足呈现，不伪造充足）。 */
+airy_err_t lang_prof_store(struct airy_lang_gateway *gw,
+                          const airy_model_profile_t *profile, uint32_t samples);
+
+/* 族的合并比率（D-3）：多模型样本池化后 sum_zh / sum_en；分母非正返回 0。 */
+double cal_ratio_pooled(double sum_zh, double sum_en);
+
+/* 置信度只由样本量与族内离散度导出：samples < AIRY_LANG_MIN_SAMPLES 时
+ * 返回 0（样本不足，禁止以 0.5 冒充），否则 1 - 2*dev 并封顶 [0.5,1.0]。 */
+double cal_confidence(uint32_t samples, double dev);
 
 /* 校准后台 worker（calibrator.c 实现，B6-2）：post 投递校准回合（懒启动
  * 线程）；stop 置停机并 join。回合上界 = list_models + 每模型 ≤4 次

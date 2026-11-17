@@ -228,6 +228,10 @@ static void test_gateway_process(void)
     memset(&cfg, 0, sizeof(cfg));
     cfg.auto_calibrate_on_create = 0;
     cfg.recalibrate_interval = 3;
+    /* fixture 隔离：不读取宿主 ~/.airymaxrt 的真实画像，避免环境污染
+     * 让断言随机器状态漂移（0.1.21 §14 条款 2）。 */
+    cfg.profiles_path = "/tmp/airy_t_lg_gw.json";
+    remove(cfg.profiles_path);
 
     airy_lang_gateway_t *gw = NULL;
     CHECK(airy_lang_gateway_create(&cfg, &gw) == AIRY_EOK && gw != NULL,
@@ -292,6 +296,7 @@ static void test_gateway_process(void)
     AIRY_FREE(stats);
 
     airy_lang_gateway_destroy(gw);
+    remove(cfg.profiles_path);
 }
 
 static void test_post_process(void)
@@ -626,6 +631,195 @@ static void test_async_calibrate(void)
     remove("/tmp/airy_t_lg_async.json");
 }
 
+/* D-3 family mock：list_models 声明三族真实 provider；count_tokens 按族
+ * 返回不同 token 效率（bpe 1.2 / uniform 0.867 / spm 1.467），验证按族池化
+ * 后比率互不相同、provider 回填与样本量登记。 */
+static int family_rpc_call(const char *socket_path, const char *method,
+                           const char *params_json, char **out_result_json,
+                           uint32_t timeout_ms)
+{
+    (void)socket_path;
+    (void)timeout_ms;
+    if (!method || !out_result_json)
+        return -1;
+    if (strcmp(method, "list_models") == 0) {
+        *out_result_json = AIRY_STRDUP(
+            "{\"models\":[{\"name\":\"gpt-4o-fam\",\"provider\":\"openai\"},"
+            "{\"name\":\"claude-3-fam\",\"provider\":\"anthropic\"},"
+            "{\"name\":\"llama-3-fam\",\"provider\":\"meta\"}]}");
+        return *out_result_json ? 0 : -1;
+    }
+    if (strcmp(method, "count_tokens") != 0 || !params_json)
+        return -1;
+
+    int bpe = strstr(params_json, "\"family\":\"bpe\"") != NULL;
+    int uni = strstr(params_json, "\"family\":\"uniform\"") != NULL;
+    int spm = strstr(params_json, "\"family\":\"spm\"") != NULL;
+    int zh1 = strstr(params_json, "深度学习的核心") != NULL;
+    int en1 = strstr(params_json, "The core of deep learning") != NULL;
+    int zh2 = strstr(params_json, "人工智能正在改变世界") != NULL;
+    int en2 = strstr(params_json, "Artificial intelligence is changing") != NULL;
+    long tokens = -1;
+
+    if (!zh1 && !en1 && !zh2 && !en2)
+        return -1;
+    if (bpe)
+        tokens = zh1 ? 12 : en1 ? 10 : zh2 ? 6 : 5;
+    else if (uni)
+        tokens = zh1 ? 9 : en1 ? 10 : zh2 ? 4 : 5;
+    else if (spm)
+        tokens = zh1 ? 15 : en1 ? 10 : zh2 ? 7 : 5;
+    else
+        return -1;
+
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"tokens\":%ld}", tokens);
+    *out_result_json = AIRY_STRDUP(buf);
+    return *out_result_json ? 0 : -1;
+}
+
+/* D-3 样本不足 mock：单模型且备用样本失败 → 仅 1 对样本。 */
+static int partial_rpc_call(const char *socket_path, const char *method,
+                            const char *params_json, char **out_result_json,
+                            uint32_t timeout_ms)
+{
+    (void)socket_path;
+    (void)timeout_ms;
+    if (!method || !out_result_json)
+        return -1;
+    if (strcmp(method, "list_models") == 0) {
+        *out_result_json = AIRY_STRDUP(
+            "{\"models\":[{\"name\":\"llama-partial\",\"provider\":\"meta\"}]}");
+        return *out_result_json ? 0 : -1;
+    }
+    if (strcmp(method, "count_tokens") != 0 || !params_json)
+        return -1;
+    /* 只回答主样本；备用样本（第二组）返回失败，制造样本不足 */
+    long tokens;
+    if (strstr(params_json, "深度学习的核心"))
+        tokens = 15;
+    else if (strstr(params_json, "The core of deep learning"))
+        tokens = 10;
+    else
+        return -1;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"tokens\":%ld}", tokens);
+    *out_result_json = AIRY_STRDUP(buf);
+    return *out_result_json ? 0 : -1;
+}
+
+/* D-3：per-family 校准。三族比率互不相同、provider 回填真实来源、
+ * 样本量 2（≥阈值）显式标注 ok。 */
+static void test_calibrate_family(void)
+{
+    airy_ipc_ops_t ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.rpc_call = family_rpc_call;
+    are_ops_set_ipc(&ops);
+
+    const char *path = "/tmp/airy_t_lg_fam.json";
+    remove(path);
+
+    airy_lang_gateway_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.auto_calibrate_on_create = 0;
+    cfg.llm_socket = "/tmp/airy_t_lg_fam.sock";
+    cfg.profiles_path = path;
+
+    airy_lang_gateway_t *gw = NULL;
+    CHECK(airy_lang_gateway_create(&cfg, &gw) == AIRY_EOK && gw != NULL,
+          "family create", "网关创建失败");
+    if (!gw) {
+        are_ops_set_ipc(NULL);
+        return;
+    }
+
+    uint32_t n = 0;
+    CHECK(airy_lang_gateway_calibrate_all(gw, &n) == AIRY_EOK && n == 3,
+          "family calibrate all", "三族模型应全部校准成功");
+
+    airy_model_profile_t gpt, cla, lla;
+    memset(&gpt, 0, sizeof(gpt));
+    memset(&cla, 0, sizeof(cla));
+    memset(&lla, 0, sizeof(lla));
+    CHECK(airy_lang_gateway_get_profile(gw, "gpt-4o-fam", &gpt) == AIRY_EOK &&
+              airy_lang_gateway_get_profile(gw, "claude-3-fam", &cla) == AIRY_EOK &&
+              airy_lang_gateway_get_profile(gw, "llama-3-fam", &lla) == AIRY_EOK,
+          "family profiles present", "三族画像应全部落库");
+    CHECK(strcmp(gpt.provider, "openai") == 0 &&
+              strcmp(cla.provider, "anthropic") == 0 &&
+              strcmp(lla.provider, "meta") == 0,
+          "family provider backfill", "provider 应回填 list_models 的真实来源");
+    CHECK(gpt.lang_ratio > 1.19 && gpt.lang_ratio < 1.21 &&
+              cla.lang_ratio > 0.85 && cla.lang_ratio < 0.88 &&
+              lla.lang_ratio > 1.45 && lla.lang_ratio < 1.48,
+          "family ratio pooled", "按族池化后的 ratio 应分别为 1.2 / 0.867 / 1.467");
+    CHECK(strcmp(gpt.family, "GPT") == 0 && strcmp(cla.family, "Claude") == 0 &&
+              strcmp(lla.family, "Llama") == 0,
+          "family labels", "family 归属错误");
+
+    char *stats = NULL;
+    CHECK(airy_lang_gateway_stats(gw, &stats) == AIRY_EOK && stats &&
+              strstr(stats, "\"lang_samples\":2") &&
+              strstr(stats, "\"lang_status\":\"ok\"") &&
+              strstr(stats, "\"provider\":\"meta\""),
+          "family stats samples", "统计应登记样本量 2 并标注 ok");
+    AIRY_FREE(stats);
+
+    airy_lang_gateway_destroy(gw);
+    are_ops_set_ipc(NULL);
+    remove(path);
+}
+
+/* D-3：样本不足显式标注。备用样本失败 → N=1 < 阈值 2，置信度 0（非 0.5），
+ * 统计面 lang_status=insufficient。 */
+static void test_calibrate_insufficient(void)
+{
+    airy_ipc_ops_t ops;
+    memset(&ops, 0, sizeof(ops));
+    ops.rpc_call = partial_rpc_call;
+    are_ops_set_ipc(&ops);
+
+    const char *path = "/tmp/airy_t_lg_ins.json";
+    remove(path);
+
+    airy_lang_gateway_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.auto_calibrate_on_create = 0;
+    cfg.llm_socket = "/tmp/airy_t_lg_ins.sock";
+    cfg.profiles_path = path;
+
+    airy_lang_gateway_t *gw = NULL;
+    CHECK(airy_lang_gateway_create(&cfg, &gw) == AIRY_EOK && gw != NULL,
+          "insufficient create", "网关创建失败");
+    if (!gw) {
+        are_ops_set_ipc(NULL);
+        return;
+    }
+
+    uint32_t n = 0;
+    CHECK(airy_lang_gateway_calibrate_all(gw, &n) == AIRY_EOK && n == 1,
+          "insufficient calibrate", "主样本成功即可产出画像");
+
+    airy_model_profile_t p;
+    memset(&p, 0, sizeof(p));
+    CHECK(airy_lang_gateway_get_profile(gw, "llama-partial", &p) == AIRY_EOK &&
+              p.lang_confidence == 0.0 &&
+              p.lang_ratio > 1.49 && p.lang_ratio < 1.51,
+          "insufficient confidence zero", "样本不足应置 0 置信度而非 0.5");
+
+    char *stats = NULL;
+    CHECK(airy_lang_gateway_stats(gw, &stats) == AIRY_EOK && stats &&
+              strstr(stats, "\"lang_samples\":1") &&
+              strstr(stats, "\"lang_status\":\"insufficient\""),
+          "insufficient status label", "统计应显式标注样本不足（N=1<2）");
+    AIRY_FREE(stats);
+
+    airy_lang_gateway_destroy(gw);
+    are_ops_set_ipc(NULL);
+    remove(path);
+}
+
 int main(void)
 {
     printf("=== lang_gateway unit tests ===\n");
@@ -644,6 +838,8 @@ int main(void)
     test_profile_capacity();
     test_profiles_load();
     test_calibrate_real_chain();
+    test_calibrate_family();
+    test_calibrate_insufficient();
     test_async_calibrate();
 
     printf("=== lang_gateway: %d passed, %d failed ===\n", g_pass, g_fail);
