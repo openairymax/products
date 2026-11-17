@@ -436,3 +436,198 @@ void test_progress_events(void)
         free_plan(final); /* G53：过门 seed 深拷贝为 OWNER */
     free_plan(seed);
 }
+
+/* ===== C-9（0.1.21）：可解析性提升三案的判据用例 ===== */
+
+/* C-9 fake：记录模型 A 的 user prompt，返回可配置响应体（围栏/原样）。 */
+static const char *g_c9_body;
+static char g_c9_prompt[8192];
+static llm_response_t g_c9_resp;
+static llm_message_t g_c9_choices[1];
+
+static int c9_fake_complete(void *ctx, const llm_request_config_t *cfg, llm_response_t **out)
+{
+    (void)ctx;
+    g_c9_prompt[0] = '\0';
+    if (cfg->message_count >= 2 && cfg->messages[1].content) {
+        size_t take = strlen(cfg->messages[1].content);
+        if (take >= sizeof(g_c9_prompt))
+            take = sizeof(g_c9_prompt) - 1;
+        __builtin_memcpy(g_c9_prompt, cfg->messages[1].content, take);
+        g_c9_prompt[take] = '\0';
+    }
+    g_c9_choices[0].role = "assistant";
+    g_c9_choices[0].content = (char *)g_c9_body;
+    __builtin_memset(&g_c9_resp, 0, sizeof(g_c9_resp));
+    g_c9_resp.choices = g_c9_choices;
+    g_c9_resp.choice_count = 1;
+    g_c9_resp.finish_reason = (char *)"stop";
+    *out = &g_c9_resp;
+    return 0;
+}
+
+/* 判据：提示词内嵌样例必须 100% 过校验器（样例漂移即判红）。 */
+void test_c9_samples(void)
+{
+    static const char *const S[] = {GRAD_S2_SAMPLE_LIT_JSON, GRAD_S2_SAMPLE_CHAIN_JSON};
+    static const char *const N[] = {"lit sample rejected", "chain sample rejected"};
+    for (int i = 0; i < 2; i++) {
+        airy_task_plan_t *plan = NULL;
+        airy_err_t err = grad_parse_plan_json_ex(S[i], "grad_plan", &plan, NULL);
+        if (err != AIRY_SUCCESS || !plan) {
+            TEST_FAIL("c9 prompt samples", N[i]);
+            if (plan)
+                free_plan(plan);
+            return;
+        }
+        free_plan(plan);
+    }
+    TEST_PASS("c9 prompt samples pass schema");
+}
+
+/* 判据：围栏 / 前后空白 / 带解释文字三种响应均可解析；未闭合围栏不猜。 */
+void test_c9_fence(void)
+{
+    static const char *const V[] = {
+        "```json\n" GRAD_S2_SAMPLE_LIT_JSON "\n```",
+        "\n\t  " GRAD_S2_SAMPLE_LIT_JSON " \r\n",
+        "Here is the plan you asked for:\n" GRAD_S2_SAMPLE_LIT_JSON "\nPlan complete.",
+    };
+    for (int i = 0; i < 3; i++) {
+        size_t n = 0;
+        int stripped = 0;
+        char *body = grad_extract_json_body(V[i], strlen(V[i]), &n, &stripped);
+        if (!body) {
+            TEST_FAIL("c9 fence", "extract null");
+            return;
+        }
+        airy_task_plan_t *plan = NULL;
+        airy_err_t err = grad_parse_plan_json_ex(body, "grad_plan", &plan, NULL);
+        AIRY_FREE(body);
+        if (err != AIRY_SUCCESS || !plan || !stripped) {
+            char m[64];
+            snprintf(m, sizeof(m), "variant %d unparsable or unstripped", i);
+            TEST_FAIL("c9 fence", m);
+            if (plan)
+                free_plan(plan);
+            return;
+        }
+        free_plan(plan);
+    }
+
+    /* 围栏开启但未闭合：原文按样返回（stripped=0），解析必须失败。 */
+    const char *bad = "```json\n" GRAD_S2_SAMPLE_LIT_JSON;
+    size_t n = 0;
+    int stripped = 0;
+    char *body = grad_extract_json_body(bad, strlen(bad), &n, &stripped);
+    airy_task_plan_t *plan = NULL;
+    airy_err_t err = grad_parse_plan_json_ex(body, "grad_plan", &plan, NULL);
+    AIRY_FREE(body);
+    if (plan)
+        free_plan(plan);
+    if (stripped || err == AIRY_SUCCESS) {
+        TEST_FAIL("c9 fence", "unterminated fence guessed");
+        return;
+    }
+    TEST_PASS("c9 fence variants parsed");
+}
+
+/* 判据：剥围栏可开关（默认开）；关掉后原文直送，围栏响应必然失败。
+ * 该用例同时证明开关不是死代码。 */
+void test_c9_switch(void)
+{
+    grad_llm_ctx_t ctx;
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    ctx.complete = c9_fake_complete;
+    ctx.plan_id = "c9_switch";
+    g_c9_body = "```json\n" GRAD_S2_SAMPLE_LIT_JSON "\n```";
+
+    airy_task_plan_t *plan = NULL;
+    airy_err_t err = grad_llm_s2_plan(NULL, NULL, &plan, &ctx);
+    if (err != AIRY_SUCCESS || !plan) {
+        TEST_FAIL("c9 fence switch", "default strip failed");
+        if (plan)
+            free_plan(plan);
+        return;
+    }
+    free_plan(plan);
+
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    ctx.complete = c9_fake_complete;
+    ctx.plan_id = "c9_switch";
+    ctx.fence_strip_off = 1;
+    plan = NULL;
+    err = grad_llm_s2_plan(NULL, NULL, &plan, &ctx);
+    if (err == AIRY_SUCCESS || plan) {
+        TEST_FAIL("c9 fence switch", "off switch stripped anyway");
+        if (plan)
+            free_plan(plan);
+        return;
+    }
+    TEST_PASS("c9 fence switch honored");
+}
+
+/* 判据：同一 field 不得连续两轮违例——连续两轮 inputs 违例后，第三轮
+ * 修补 prompt 必须同时携带位置、合法形态与强化段；成功轮清空记忆。 */
+void test_c9_repeat(void)
+{
+    static const char *PATCH =
+        "{\"patch_id\":\"p1\",\"source\":\"C_Model\",\"error_code\":\"E-01\","
+        "\"affected_scope\":[\"S_02\"],\"missing_artifact\":\"x\",\"suggestion\":\"fix\"}";
+    static const char *BAD =
+        "{\"nodes\":["
+        "{\"id\":\"S_01\",\"goal\":\"collect\",\"role\":\"retrieve\","
+        "\"outputs\":[\"doc\"],\"cost_time_ms\":10},"
+        "{\"id\":\"S_02\",\"goal\":\"write\",\"role\":\"act\",\"depends\":[\"S_01\"],"
+        "\"inputs\":[\"seed\"],\"outputs\":[\"report\"],\"cost_time_ms\":10}"
+        "],\"entry\":[\"S_01\"]}";
+
+    grad_llm_ctx_t ctx;
+    __builtin_memset(&ctx, 0, sizeof(ctx));
+    ctx.complete = c9_fake_complete;
+    ctx.plan_id = "c9_repeat";
+    g_c9_body = BAD;
+
+    airy_task_plan_t *plan = NULL;
+    airy_err_t err = grad_llm_s2_plan(NULL, PATCH, &plan, &ctx);
+    if (err == AIRY_SUCCESS || plan || !ctx.last_detail_set ||
+        strcmp(ctx.last_detail.field, "inputs") != 0 || ctx.detail_repeat != 0) {
+        TEST_FAIL("c9 repeat field", "round1 detail not recorded");
+        if (plan)
+            free_plan(plan);
+        return;
+    }
+    err = grad_llm_s2_plan(NULL, PATCH, &plan, &ctx);
+    if (err == AIRY_SUCCESS || plan || ctx.detail_repeat != 1) {
+        TEST_FAIL("c9 repeat field", "round2 repeat not flagged");
+        if (plan)
+            free_plan(plan);
+        return;
+    }
+
+    g_c9_body = GRAD_S2_SAMPLE_CHAIN_JSON;
+    plan = NULL;
+    err = grad_llm_s2_plan(NULL, PATCH, &plan, &ctx);
+    if (err != AIRY_SUCCESS || !plan) {
+        TEST_FAIL("c9 repeat field", "repair round failed");
+        if (plan)
+            free_plan(plan);
+        return;
+    }
+    free_plan(plan);
+
+    if (!strstr(g_c9_prompt, "field \"inputs\"") ||
+        !strstr(g_c9_prompt, "Legal form for field \"inputs\"") ||
+        !strstr(g_c9_prompt, "two consecutive rounds")) {
+        char m[96];
+        snprintf(m, sizeof(m), "prompt head: %.80s", g_c9_prompt);
+        TEST_FAIL("c9 repeat field", m);
+        return;
+    }
+    if (ctx.last_detail_set || ctx.detail_repeat != 0) {
+        TEST_FAIL("c9 repeat field", "detail not reset on success");
+        return;
+    }
+    TEST_PASS("c9 repeat field fed back and escalated");
+}
+

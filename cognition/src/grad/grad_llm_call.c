@@ -50,8 +50,11 @@ char *grad_extract_json_body(const char *text, size_t len, size_t *out_len, int 
     const char *s = text;
     const char *e = text + len;
     grad_trim(&s, &e);
+    if ((s != text || e != text + len) && stripped)
+        *stripped = 1;
 
     /* ① 代码围栏：```[lang]\n ... \n``` */
+    int fence_broken = 0;
     if (e - s >= 3 && s[0] == '`' && s[1] == '`' && s[2] == '`') {
         const char *nl = s;
         while (nl < e && *nl != '\n')
@@ -72,13 +75,15 @@ char *grad_extract_json_body(const char *text, size_t len, size_t *out_len, int 
             if (stripped)
                 *stripped = 1;
         } else {
+            fence_broken = 1;
             AIRY_LOG_WARN("GRAD-LLM: unterminated code fence, raw head: %.*s",
                           GRAD_FENCE_PROBE_MAX, text);
         }
     }
 
-    /* ② JSON 外解释文字：取首个 '{' 到最后一个 '}' 的区间 */
-    if (s < e && (*s != '{' || e[-1] != '}')) {
+    /* ② JSON 外解释文字：取首个 '{' 到最后一个 '}' 的区间。
+     * 围栏开启却未闭合时不得再做区间猜测——原文按样交给解析器归因。 */
+    if (!fence_broken && s < e && (*s != '{' || e[-1] != '}')) {
         const char *b = NULL;
         const char *c = NULL;
         for (const char *q = s; q < e; q++) {

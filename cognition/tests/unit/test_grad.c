@@ -223,6 +223,10 @@ int main(void)
     RUN_TEST(test_grad_c11_contract);
     RUN_TEST(test_grad_t3_patch_prompt);
     RUN_TEST(test_grad_t4_stream);
+    RUN_TEST(test_c9_samples);
+    RUN_TEST(test_c9_fence);
+    RUN_TEST(test_c9_switch);
+    RUN_TEST(test_c9_repeat);
     RUN_TEST(test_schema_valid_full);
     RUN_TEST(test_schema_optional_metadata);
     RUN_TEST(test_schema_plan_id);
