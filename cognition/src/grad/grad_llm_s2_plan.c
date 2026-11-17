@@ -308,8 +308,9 @@ static char *s2_params_dup(cJSON *nj)
 
 #endif /* AIRY_HAS_CJSON */
 
-airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
-                                   airy_task_plan_t **out_plan, grad_detail_t *detail)
+static airy_err_t grad_parse_plan_impl(const char *json, const char *plan_id,
+                                       const char *const *tools, size_t ntools,
+                                       airy_task_plan_t **out_plan, grad_detail_t *detail)
 {
     grad_detail_set(detail, -1, "", "");
     if (!json || !out_plan) {
@@ -317,6 +318,8 @@ airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
         return AIRY_EINVAL;
     }
     *out_plan = NULL;
+    (void)tools;
+    (void)ntools;
 
 #ifdef AIRY_HAS_CJSON
     cJSON *root = cJSON_Parse(json);
@@ -333,7 +336,9 @@ airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
      * 系统性地降级为 fallback 空壳（终态 fail-closed）。 */
     const char *eff_id = plan_id ? plan_id : GRAD_PLAN_ID_DEFAULT;
     grad_schema_err_t serr;
-    if (grad_plan_schema_validate(root, eff_id, &serr) != AIRY_SUCCESS) {
+    /* C-16：除结构校验外，显式 handler 必须来自本轮工具目录快照；
+     * tools=NULL 时退化为纯结构校验（既有调用点语义不变）。 */
+    if (grad_plan_schema_validate_tools(root, eff_id, tools, ntools, &serr) != AIRY_SUCCESS) {
         AIRY_LOG_WARN("GRAD-A: plan schema violation (node=%d field=%s reason=%s)",
                       serr.index, serr.field, serr.reason);
         grad_detail_set(detail, serr.index, serr.field, serr.reason);
@@ -563,10 +568,23 @@ airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
 #endif
 }
 
+airy_err_t grad_parse_plan_json_ex_tools(const char *json, const char *plan_id,
+                                         const char *const *tools, size_t ntools,
+                                         airy_task_plan_t **out_plan, grad_detail_t *detail)
+{
+    return grad_parse_plan_impl(json, plan_id, tools, ntools, out_plan, detail);
+}
+
+airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
+                                   airy_task_plan_t **out_plan, grad_detail_t *detail)
+{
+    return grad_parse_plan_impl(json, plan_id, NULL, 0, out_plan, detail);
+}
+
 airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
                                 airy_task_plan_t **out_plan)
 {
-    return grad_parse_plan_json_ex(json, plan_id, out_plan, NULL);
+    return grad_parse_plan_impl(json, plan_id, NULL, 0, out_plan, NULL);
 }
 
 /* 保守降级计划：单节点空壳，以 "fallback_" 前缀标记（engine 采纳前拒绝）。
@@ -686,7 +704,9 @@ airy_err_t grad_llm_s2_plan(const airy_gccp_goal_t *goal, const char *patch_json
     }
 
     grad_detail_t detail;
-    airy_err_t parse_err = grad_parse_plan_json_ex(plan_json, ctx->plan_id, out_plan, &detail);
+    airy_err_t parse_err =
+        grad_parse_plan_json_ex_tools(plan_json, ctx->plan_id, ctx->allowed_tools,
+                                      ctx->allowed_tool_count, out_plan, &detail);
     if (parse_err != AIRY_SUCCESS) {
         grad_rec_detail(ctx, detail.index, detail.field, detail.reason);
         AIRY_LOG_WARN("GRAD-A: plan JSON parse failed (err=%d index=%d field=%s reason=%s)",
