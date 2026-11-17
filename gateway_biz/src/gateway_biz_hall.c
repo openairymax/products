@@ -243,6 +243,18 @@ static cJSON *gw_hall_entry_find(cJSON *entries, const char *exec_id)
     return NULL;
 }
 
+/* 工作大厅只认任务账本的四个类别。hall 事件目录同时承载网关自身的
+ * 其他审计流（如 PEP 能力判定 category=cap、task_id=gateway），它们不是
+ * 任务，派生进看板会留下一条永远 running 的幽灵条目。 */
+static bool gw_hall_board_is_task_category(const cJSON *cat)
+{
+    if (!cJSON_IsString(cat))
+        return false;
+    const char *c = cat->valuestring;
+    return strcmp(c, "blueprint") == 0 || strcmp(c, "progress") == 0 ||
+           strcmp(c, "issue") == 0 || strcmp(c, "result") == 0;
+}
+
 /* 看板事件回退（0.1.21 L-9）：work_hall_state.json 只记被调度器派发的任务，
  * 同步 agent.run 不经过调度、失败与取消此前也不落终态事件，看板因此恒空
  * 或恒挂 running。board 为空时按 hall 事件派生：同一 execution_id 以最新
@@ -261,10 +273,12 @@ static void gw_hall_board_fill(cJSON *entries)
         cJSON *e = cJSON_Parse(evts.items[i].json);
         if (!e)
             continue;
-        const cJSON *file = cJSON_GetObjectItem(e, "file");
+        /* 事件在 hall.* 出口已由 hall_event_flatten 摊平：task_id 与
+         * content 都在顶层，没有 "file" 信封（replay/stream 同形态）。 */
         const cJSON *content = cJSON_GetObjectItem(e, "content");
-        const cJSON *tid = cJSON_GetObjectItem(file, "task_id");
-        if (!cJSON_IsString(tid) || !tid->valuestring[0]) {
+        const cJSON *tid = cJSON_GetObjectItem(e, "task_id");
+        if (!cJSON_IsString(tid) || !tid->valuestring[0] ||
+            !gw_hall_board_is_task_category(cJSON_GetObjectItem(e, "category"))) {
             cJSON_Delete(e);
             continue;
         }
@@ -291,7 +305,7 @@ static void gw_hall_board_fill(cJSON *entries)
 
         /* C-18：账本同源后，终态由 agent_d 的 task_state 事件给出
          * （completed/failed/cancelled），progress 事件给出过程进度；
-         * run_result 仅作旧数据兼容。事件已按 (ts_utc, seq) 排序，
+         * run_result 仅作旧数据兼容。事件已按 (ts_utc, gseq) 排序，
          * 后者自然覆盖前者。 */
         if (strcmp(ev->valuestring, "task_state") == 0) {
             const cJSON *st = cJSON_GetObjectItem(content, "state");
