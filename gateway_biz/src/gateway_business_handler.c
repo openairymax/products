@@ -108,6 +108,9 @@ gateway_business_ctx_t *gateway_business_ctx_create(void)
                            "mem.sock");
     gw_resolve_daemon_sock(ctx->sched_sock_path, sizeof(ctx->sched_sock_path), "AIRY_SCHED_SOCK",
                            "sched.sock");
+    /* 预算树（0.1.21 C-21）：把本进程实际生效的转发预算打进日志，
+     * 使「查配置」与「看运行」不再需要人肉推算。 */
+    airy_budget_log("gateway");
     gw_resolve_daemon_sock(ctx->think_sock_path, sizeof(ctx->think_sock_path), "AIRY_THINK_SOCK",
                            "think.sock");
     gw_resolve_daemon_sock(ctx->a2a_sock_path, sizeof(ctx->a2a_sock_path), "AIRY_A2A_SOCK",

@@ -28,6 +28,7 @@
 #include "gateway_business_handler.h"
 #include "gateway_mcp_server.h"
 
+#include "airy_budget.h"
 #include "airy_defaults.h"
 #include "airy_memory.h"
 #include "atomic_compat.h"
@@ -36,23 +37,22 @@
 extern "C" {
 #endif
 
-/* LLM full-response timeout 90s: long-thinking / multi-tool_call rounds can
- * exceed 30s; the old 30s value made the gateway hit recv timeout while the
- * LLM had not yet returned, breaking the tool chain. */
-#define GW_LLM_DEFAULT_TIMEOUT_MS 90000
-/* think.process timeout 120s: dual thinking (GCCP probe/confirm + GRAD
- * multi-round quadruple-check) involves several LLM calls, each measured at
- * 15-25s; 120s covers the worst case. */
-#define GW_THINK_TIMEOUT_MS 120000
+/* 转发预算统一取预算树（0.1.21 C-21）：gateway 是 llm_d / tool_d /
+ * agent_d 的调用方，三个值不再写死。语义分层——
+ *   llm   : server 层（llm_d 内部一次完整调用 + 重试的背压上限）
+ *   tool  : tool 的外层（内层 60s 兜底，外层留 25% 余量）
+ *   run   : client 层（agent.run 可长跑，只有它跟随最外层预算）
+ * 写死字面量曾使 gateway 90s 与 llm_d 85s 之间只剩 5s 余量。 */
+#define GW_LLM_DEFAULT_TIMEOUT_MS ((int)airy_budget_ms(AIRY_BUDGET_SERVER))
+/* think 转发预算：think 是 server 的被调用方，取 server 层（≥ think × 1.2）。 */
+#define GW_THINK_TIMEOUT_MS ((int)airy_budget_ms(AIRY_BUDGET_SERVER))
 #define GW_LLM_MAX_RESP 1048576
 /* LLM daemon 端点缺省端口：SSoT 引用，真值唯一定义于 commons/include/airy_defaults.h */
 #define GW_LLM_DEFAULT_TCP_PORT AIRY_PORT_LLM_D
 #define GW_EXTERNAL_AGENT_ID "external"
 
-/* Tool execution timeout 90s: shell_run itself times out at 60s; the old 30s
- * value would hit recv timeout before the tool finished, making the gateway
- * wrongly report long commands as failed. */
-#define GW_TOOL_TIMEOUT_MS 90000
+/* tool 外层预算：tool_d 内层兜底取 tool 层，调用方留 25% 余量。 */
+#define GW_TOOL_TIMEOUT_MS ((int)airy_budget_outer(airy_budget_ms(AIRY_BUDGET_TOOL)))
 
 /* @brief Gateway business context: resolved daemon socket paths + model config
  *
