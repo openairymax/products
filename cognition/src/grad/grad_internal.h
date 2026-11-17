@@ -117,6 +117,22 @@ typedef struct grad_round_hist {
     size_t scope_count;
 } grad_round_hist_t;
 
+/**
+ * @brief 计划生成失败的字段级详情（C-8，0.1.21）。
+ *
+ * 无 seed 时模型 A 生成失败不得产出 fallback 空壳，必须把 schema/解析
+ * 失败定位回传调用方。index 为 nodes[] 下标；整份结构错误（JSON 语法、
+ * nodes 非数组/空数组、LLM 出口失败）统一为 -1，由 field/reason 区分。
+ */
+#define GRAD_DETAIL_FIELD_MAX 32
+#define GRAD_DETAIL_REASON_MAX 64
+
+typedef struct grad_detail {
+    int index;
+    char field[GRAD_DETAIL_FIELD_MAX];
+    char reason[GRAD_DETAIL_REASON_MAX];
+} grad_detail_t;
+
 /** @brief 轮次注记（协调器 → A 侧历史记忆写入；全部 BORROW）。 */
 typedef struct grad_round_note {
     uint32_t round;
@@ -403,6 +419,14 @@ typedef struct grad_llm_ctx {
     grad_ctx_budget_t ctxb;
     uint32_t max_concurrent;
     uint32_t server_parallel;
+
+    /* C-8（0.1.21，尾部追加）：可恢复性开关与字段级失败记忆。
+     * fallback_as_seed=0（默认）：无 seed 生成失败直接失败，禁止 fallback
+     * 空壳充当初始计划；=1 保留旧行为（仅用于对比实验/回退）。
+     * last_detail 记录上一轮 S2 解析/schema 失败，修补轮 prompt 回喂。 */
+    int fallback_as_seed;
+    grad_detail_t last_detail;
+    int last_detail_set;
 } grad_llm_ctx_t;
 
 /**
@@ -413,8 +437,9 @@ typedef struct grad_llm_ctx {
  * Later rounds (patch_json non-NULL): LLM generates an incremental fix
  * plan JSON from the rejection patch.
  *
- * Degradation when LLM is unavailable: build a minimal single-node plan
- * from goal keywords (conservative).
+ * C-8（0.1.21）：无 seed 的初始生成失败不再降级为 fallback 空壳——
+ * fallback_as_seed=0 时返回 AIRY_ESERVICE 并写 ctx->last_detail；
+ * fallback 只允许在修补轮内部占位（且携带最小可验元数据）。
  *
  * @ownership out_plan: OWNER
  */
@@ -487,6 +512,10 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
 char *grad_goal_to_json(const airy_gccp_goal_t *goal, const grad_llm_ctx_t *ctx);
 airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
                                 airy_task_plan_t **out_plan);
+/* C-8：带字段级失败详情的解析入口（detail 可 NULL；失败时 index=-1 表示
+ * 整份结构错误，否则为 nodes[] 下标）。 */
+airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
+                                   airy_task_plan_t **out_plan, grad_detail_t *detail);
 
 /* plan_metadata.c — 缺省元数据推导（0.1.20 C4）：只补缺省不覆盖显式值 */
 size_t grad_plan_metadata_fill(airy_task_plan_t *plan);
