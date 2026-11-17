@@ -227,11 +227,12 @@ static const char *const k_install[] = {
 static const char *const k_write[] = {
     "删除", "创建", "新建", "修改", "写入", "改写", "覆盖", "移动", "重命名",
     "复制", "追加", "保存", "下载", "上传", "备份", "恢复", "清理", "格式化",
-    "部署", "配置", "启动", "停止", "重启", "编译", "构建", "提交", "推送",
+    "部署", "配置", "启动", "停止", "重启", "编译", "构建",
     "rm", "mv", "cp", "mkdir", "rmdir", "touch", "tee", "truncate", "ln",
     "sed -i", "dd if=", "kill", "delete", "remove", "create", "modify",
     "rename", "move", "copy", "save", "upload", "download", "deploy",
-    "restart", "reload", "commit", "push", "build", "compile", NULL};
+    "restart", "reload", "git commit", "git push", "git add",
+    "build", "compile", NULL};
 
 static const char *const k_read[] = {
     "查看", "读取", "列出", "显示", "查找", "搜索", "分析", "统计", "汇总",

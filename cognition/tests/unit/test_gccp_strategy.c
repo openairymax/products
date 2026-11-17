@@ -402,6 +402,142 @@ static int test_gccp_free_safety(void)
     return 0;
 }
 
+/* ==================== 14. 动作分级守卫：只读不弹确认 ==================== */
+
+static int test_gccp_guard_read(void)
+{
+    /* LLM 误判为需要交互：只读指令必须被守卫拉回 need_interaction=0 */
+    const char *reply =
+        "{\"need_interaction\":1,\"questions\":[{\"id\":\"endpoint\",\"question\":\"终点？\","
+        "\"required\":1}]}";
+    fake_completer_t fake;
+    fake_init(&fake, reply);
+    airy_gccp_probe_t *probe = NULL;
+
+    airy_err_t err = gccp_probe(fake_complete, &fake, NULL, "查看当前目录有哪些文件",
+                                strlen("查看当前目录有哪些文件"), &probe);
+    CHECK(err == AIRY_EOK, "read-only probe -> EOK", "expected EOK");
+    CHECK(probe && probe->need_interaction == 0, "read-only forces need_interaction=0",
+          "read-only must not ask");
+    CHECK(probe && probe->question_count == 0, "read-only clears questions",
+          "questions must be empty");
+    airy_gccp_probe_free(probe);
+    fake_release(&fake);
+
+    /* 降级路径同判据：无 LLM 的启发式 4+1 也必须被只读守卫清空 */
+    probe = NULL;
+    err = gccp_probe(NULL, NULL, NULL, "分析这个仓库的提交历史", strlen("分析这个仓库的提交历史"),
+                     &probe);
+    CHECK(err == AIRY_EOK, "read-only degraded -> EOK", "expected EOK");
+    CHECK(probe && probe->need_interaction == 0 && probe->question_count == 0,
+          "read-only degraded forces no interaction", "degraded read must not ask");
+    airy_gccp_probe_free(probe);
+    return 0;
+}
+
+/* ==================== 15. 动作分级守卫：高危必确认 ==================== */
+
+static int test_gccp_guard_priv(void)
+{
+    /* LLM 判定不交互：提权指令必须被守卫拉回交互，并补 verify 必答问题 */
+    fake_completer_t fake;
+    fake_init(&fake, "{\"need_interaction\":0}");
+    airy_gccp_probe_t *probe = NULL;
+
+    const char *cmd = "sudo rm -rf /etc/nginx";
+    airy_err_t err = gccp_probe(fake_complete, &fake, NULL, cmd, strlen(cmd), &probe);
+    CHECK(err == AIRY_EOK, "priv probe -> EOK", "expected EOK");
+    CHECK(probe && probe->need_interaction == 1, "priv forces need_interaction=1",
+          "privileged must confirm");
+    CHECK(probe && probe->question_count == 1, "priv seeds one question", "expected seeded question");
+    CHECK(probe && probe->questions && strcmp(probe->questions[0].id, "verify") == 0,
+          "priv seeded question id=verify", "id mismatch");
+    CHECK(probe && probe->questions && probe->questions[0].required == 1,
+          "priv seeded question required", "must be mandatory");
+    airy_gccp_probe_free(probe);
+    fake_release(&fake);
+
+    /* 安装类同判据 */
+    fake_init(&fake, "{\"need_interaction\":0}");
+    probe = NULL;
+    err = gccp_probe(fake_complete, &fake, NULL, "安装 nginx 并启动服务",
+                     strlen("安装 nginx 并启动服务"), &probe);
+    CHECK(err == AIRY_EOK, "install probe -> EOK", "expected EOK");
+    CHECK(probe && probe->need_interaction == 1 && probe->question_count == 1,
+          "install forces confirmation", "install must confirm");
+    airy_gccp_probe_free(probe);
+    fake_release(&fake);
+    return 0;
+}
+
+/* ==================== 16. 简单门不得绕过高危确认 ==================== */
+
+static int test_gccp_guard_short_cmd(void)
+{
+    fake_completer_t fake;
+    fake_init(&fake, "{}");
+    airy_gccp_probe_t *probe = NULL;
+
+    const char *cmd = "rm -rf /";
+    airy_err_t err = gccp_probe(fake_complete, &fake, NULL, cmd, strlen(cmd), &probe);
+    CHECK(err == AIRY_EOK, "short write cmd -> EOK", "expected EOK");
+    CHECK(fake.calls == 0, "short write cmd hits simple gate", "expected simple gate short-circuit");
+    CHECK(probe && probe->need_interaction == 1, "simple gate cannot bypass confirmation",
+          "high-risk short command must confirm");
+    CHECK(probe && probe->question_count == 1 && probe->questions &&
+              strcmp(probe->questions[0].id, "verify") == 0,
+          "short write cmd seeded verify question", "verify question missing");
+    airy_gccp_probe_free(probe);
+    fake_release(&fake);
+    return 0;
+}
+
+/* ==================== 17. 未知档位不覆盖模型判定 ==================== */
+
+static int test_gccp_guard_unknown(void)
+{
+    const char *reply =
+        "{\"need_interaction\":1,\"questions\":[{\"id\":\"audience\",\"question\":\"给谁看？\","
+        "\"required\":1}]}";
+    fake_completer_t fake;
+    fake_init(&fake, reply);
+    airy_gccp_probe_t *probe = NULL;
+
+    const char *input = "会议纪要应该包含哪些要素";
+    airy_err_t err = gccp_probe(fake_complete, &fake, NULL, input, strlen(input), &probe);
+    CHECK(err == AIRY_EOK, "unknown probe -> EOK", "expected EOK");
+    CHECK(probe && probe->need_interaction == 1, "unknown keeps model decision",
+          "unknown must not override");
+    CHECK(probe && probe->question_count == 1, "unknown keeps model questions",
+          "questions must be preserved");
+    airy_gccp_probe_free(probe);
+    fake_release(&fake);
+    return 0;
+}
+
+/* ==================== 18. 非交互回退 ==================== */
+
+static int test_gccp_guard_silent(void)
+{
+    fake_completer_t fake;
+    fake_init(&fake,
+              "{\"need_interaction\":1,\"questions\":[{\"id\":\"verify\",\"question\":\"验收？\","
+              "\"required\":1}]}");
+    airy_gccp_probe_t *probe = NULL;
+
+    setenv("AIRY_GCCP_ASSUME_NO_INTERACTION", "1", 1);
+    const char *input = "删除 /tmp/a.txt";
+    airy_err_t err = gccp_probe(fake_complete, &fake, NULL, input, strlen(input), &probe);
+    unsetenv("AIRY_GCCP_ASSUME_NO_INTERACTION");
+
+    CHECK(err == AIRY_EOK, "silent probe -> EOK", "expected EOK");
+    CHECK(probe && probe->need_interaction == 0 && probe->question_count == 0,
+          "silent env forces no interaction", "silent must never ask");
+    airy_gccp_probe_free(probe);
+    fake_release(&fake);
+    return 0;
+}
+
 int main(void)
 {
     printf("=== Cognition GCCP Strategy Tests ===\n\n");
@@ -419,6 +555,11 @@ int main(void)
     test_gccp_confirm_missing_confidence();
     test_gccp_confirm_degrade();
     test_gccp_free_safety();
+    test_gccp_guard_read();
+    test_gccp_guard_priv();
+    test_gccp_guard_short_cmd();
+    test_gccp_guard_unknown();
+    test_gccp_guard_silent();
 
     printf("\n%d/%d passed\n", tests_passed, tests_run);
     if (tests_passed != tests_run) {
