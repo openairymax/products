@@ -12,22 +12,24 @@
 
 #include "grad_internal.h"
 
-/* 模型 A 系统提示（GRAD 计划生成指令） */
+/* 模型 A 系统提示（GRAD 计划生成指令）。C-9 做法②：内嵌两个必须通过
+ * 校验器的最小样例（lit: 输入 / producer 链），并显式带 schema 版本号；
+ * 样例字面量来自 grad_internal.h（与样例自检共用，漂移即判红）。 */
 static const char GRAD_S2_SYSTEM_PROMPT[] =
     "You are the generator (Model A) in a goal-anchored DAG planning system. "
     "Produce a task plan as a dependency graph (DAG) targeting the confirmed goal.\n"
-    "Reply with ONLY a JSON object (no markdown fences):\n"
-    "{\n"
-    "  \"nodes\": [\n"
-    "    {\"id\":\"S_01\",\"goal\":\"...\",\"role\":\"retrieve\",\"depends\":[],\n"
-    "     \"inputs\":[\"lit:seed\"],\"outputs\":[\"artifact_a\"],\n"
-    "     \"cost_time_ms\":3000,\"cost_mem_mb\":128,\"invariant_guard\":false}\n"
-    "  ],\n"
-    "  \"entry\":[\"S_01\"]\n"
-    "}\n"
-    "Rules: every node's inputs must be produced by its transitive predecessors "
+    "Reply with ONLY a JSON object (no markdown fences).\n"
+    "Schema version: " GRAD_PLAN_SCHEMA_VERSION "\n"
+    "Minimal valid sample 1 (literal input):\n"
+    GRAD_S2_SAMPLE_LIT_JSON "\n"
+    "Minimal valid sample 2 (producer chain):\n"
+    GRAD_S2_SAMPLE_CHAIN_JSON "\n"
+    "Rules: every inputs entry MUST be either \"lit:<name>\" or "
+    "\"<producer_id>.<artifact>\", where producer_id is a node in this node's "
+    "transitive depends closure and artifact is one of its outputs; "
+    "role MUST be one of plan, retrieve, reason, act, verify; "
+    "every node's inputs must be produced by its transitive predecessors "
     "(no dangling dependencies); the graph must be acyclic; "
-    "role must be one of plan, retrieve, reason, act, verify; "
     "outputs, inputs, cost_time_ms and cost_mem_mb may be omitted "
     "(they are inferred automatically, but explicit values are preferred); "
     "nodes that must not break the goal's core invariant set invariant_guard=true.\n"
