@@ -527,15 +527,17 @@ char *grad_extract_json_body(const char *text, size_t len, size_t *out_len, int 
 #define GRAD_S2_SAMPLE_LIT_JSON                                                 \
     "{\"nodes\":[{\"id\":\"S_01\",\"goal\":\"collect facts\","                  \
     "\"role\":\"retrieve\",\"depends\":[],\"inputs\":[\"lit:seed\"],"           \
-    "\"outputs\":[\"facts\"],\"cost_time_ms\":2000}],\"entry\":[\"S_01\"]}"
+    "\"outputs\":[\"facts\"],\"cost_time_ms\":2000,\"kind\":\"report\"}],"      \
+    "\"entry\":[\"S_01\"]}"
 #define GRAD_S2_SAMPLE_CHAIN_JSON                                               \
     "{\"nodes\":["                                                              \
     "{\"id\":\"S_01\",\"goal\":\"collect facts\",\"role\":\"retrieve\","        \
     "\"depends\":[],\"inputs\":[\"lit:seed\"],\"outputs\":[\"facts\"],"         \
-    "\"cost_time_ms\":2000},"                                                   \
+    "\"cost_time_ms\":2000,\"kind\":\"report\"},"                               \
     "{\"id\":\"S_02\",\"goal\":\"write report\",\"role\":\"act\","              \
     "\"depends\":[\"S_01\"],\"inputs\":[\"S_01.facts\"],\"outputs\":[\"report\"]," \
-    "\"cost_time_ms\":3000}"                                                    \
+    "\"handler\":\"shell_run\",\"params\":{\"command\":\"echo report\"},"       \
+    "\"kind\":\"exec\",\"cost_time_ms\":3000}"                                  \
     "],\"entry\":[\"S_01\"]}"
 
 /* grad_llm_s2_plan.c — 模型 A 计划生成域 */

@@ -32,6 +32,14 @@ static const char GRAD_S2_SYSTEM_PROMPT[] =
     "(no dangling dependencies); the graph must be acyclic; "
     "outputs, inputs, cost_time_ms and cost_mem_mb may be omitted "
     "(they are inferred automatically, but explicit values are preferred); "
+    "executable nodes MUST declare \"handler\" (a tool name, e.g. shell_run), "
+    "\"params\" (JSON object with that handler's arguments, e.g. "
+    "{\"command\":\"rpm -q tree\"}) and \"kind\":\"exec\"; nodes that only "
+    "verify or summarize MUST declare \"kind\":\"verify\" or "
+    "\"kind\":\"report\" and carry no handler. When handler is omitted the "
+    "role decides: act -> shell_run/exec, verify -> verify, "
+    "plan/retrieve/reason -> report. A node with kind=exec and no handler is "
+    "a defective plan, not a no-op.\n"
     "nodes that must not break the goal's core invariant set invariant_guard=true.\n"
     "Structure first (T3): keep every text field terse and verifiable — "
     "concrete metadata, dependencies and acceptance-worthy outputs carry the "
@@ -85,6 +93,14 @@ static const char *grad_field_hint(const char *field)
         return "existing node ids only; self references are forbidden";
     if (strcmp(field, "id") == 0)
         return "unique node id matching [A-Za-z0-9_-]{1,48}";
+    if (strcmp(field, "handler") == 0)
+        return "a tool name available at runtime (e.g. shell_run); required "
+               "when kind is exec";
+    if (strcmp(field, "params") == 0)
+        return "a JSON object holding the handler's arguments, e.g. "
+               "{\"command\":\"rpm -q tree\"}";
+    if (strcmp(field, "kind") == 0)
+        return "one of exec, verify, report; role act defaults to exec";
     if (strcmp(field, "goal") == 0)
         return "a non-empty string of at most 512 characters";
     return NULL;
@@ -192,7 +208,8 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
                      "containing just the nodes listed in affected_scope (plus any NEW "
                      "producer nodes they depend on), restating each affected node's "
                      "corrected definition with all required fields (id, goal, role, "
-                     "depends). Do NOT repeat unchanged nodes. Keep node ids stable.");
+                     "depends, handler, params, kind). Do NOT repeat unchanged nodes. "
+                     "Keep node ids stable.");
         } else {
             snprintf(prompt + off, cap - off,
                      "Generate the FULL corrected plan JSON (all nodes, consistent "
@@ -223,6 +240,73 @@ static void grad_detail_set(grad_detail_t *detail, int index, const char *field,
     snprintf(detail->field, sizeof(detail->field), "%s", field ? field : "");
     snprintf(detail->reason, sizeof(detail->reason), "%s", reason ? reason : "");
 }
+
+/* C-12：执行角色缺省绑定的工具名。GRAD 的 act 节点即「执行一步真实
+ * 动作」，与 tool_d 的 shell_run 一一对应；映射只在此处定义一次。 */
+#define GRAD_ACT_HANDLER "shell_run"
+
+static uint8_t s2_kind_of(const char *s)
+{
+    if (!s)
+        return AIRY_TASK_NODE_AUTO;
+    if (strcmp(s, "exec") == 0)
+        return AIRY_TASK_NODE_EXEC;
+    if (strcmp(s, "verify") == 0)
+        return AIRY_TASK_NODE_VERIFY;
+    if (strcmp(s, "report") == 0)
+        return AIRY_TASK_NODE_REPORT;
+    return AIRY_TASK_NODE_AUTO;
+}
+
+/* C-12：角色映射补全（意图图与执行图同一张图）。模型未声明 kind 时按
+ * 角色定类别：有 handler 即可执行，act 缺省绑 shell_run，verify 只验证，
+ * plan/retrieve/reason 只汇报。kind=exec 而角色非 act 且无 handler 时
+ * 保留空 handler，交由 dispatch 报 AIRY_EINVAL（契约违约不得静默成功）。 */
+static void s2_kind_fill(airy_task_node_t *tn)
+{
+    const char *role = tn->task_node_agent_role;
+
+    if (tn->task_node_kind == AIRY_TASK_NODE_AUTO) {
+        if (tn->task_node_handler_name)
+            tn->task_node_kind = AIRY_TASK_NODE_EXEC;
+        else if (role && strcmp(role, "act") == 0)
+            tn->task_node_kind = AIRY_TASK_NODE_EXEC;
+        else if (role && strcmp(role, "verify") == 0)
+            tn->task_node_kind = AIRY_TASK_NODE_VERIFY;
+        else
+            tn->task_node_kind = AIRY_TASK_NODE_REPORT;
+    }
+    if (tn->task_node_kind == AIRY_TASK_NODE_EXEC && !tn->task_node_handler_name &&
+        role && strcmp(role, "act") == 0)
+        tn->task_node_handler_name = AIRY_STRDUP(GRAD_ACT_HANDLER);
+}
+
+#ifdef AIRY_HAS_CJSON
+
+/* C-12：params 允许字符串（已是 JSON 文本）或内联对象/数组；内联形式
+ * 序列化为未格式化文本。cJSON 打印缓冲用 cJSON_free 释放，转出串走
+ * AIRY_FREE 域，避免跨分配器释放。 */
+static char *s2_params_dup(cJSON *nj)
+{
+    cJSON *f = cJSON_GetObjectItem(nj, "params");
+    char *printed = NULL;
+    char *out = NULL;
+
+    if (!f)
+        return NULL;
+    if (cJSON_IsString(f) && f->valuestring)
+        return AIRY_STRDUP(f->valuestring);
+    if (!cJSON_IsObject(f) && !cJSON_IsArray(f))
+        return NULL;
+    printed = cJSON_PrintUnformatted(f);
+    if (!printed)
+        return NULL;
+    out = AIRY_STRDUP(printed);
+    cJSON_free(printed);
+    return out;
+}
+
+#endif /* AIRY_HAS_CJSON */
 
 airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
                                    airy_task_plan_t **out_plan, grad_detail_t *detail)
@@ -307,6 +391,18 @@ airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
             tn->task_node_id_len = strlen(tn->task_node_id);
         if (tn->task_node_agent_role)
             tn->task_node_role_len = strlen(tn->task_node_agent_role);
+
+        /* C-12：把「意图-产物」节点映射到执行层的「handler + 参数」调用；
+         * 角色映射只在 s2_kind_fill 内定义一次（SSoT）。 */
+        cJSON *handler = cJSON_GetObjectItem(node, "handler");
+        cJSON *kind = cJSON_GetObjectItem(node, "kind");
+        tn->task_node_handler_name =
+            cJSON_IsString(handler) && handler->valuestring
+                ? AIRY_STRDUP(handler->valuestring)
+                : NULL;
+        tn->task_node_params = s2_params_dup(node);
+        tn->task_node_kind = s2_kind_of(cJSON_IsString(kind) ? kind->valuestring : NULL);
+        s2_kind_fill(tn);
         tn->task_node_timeout_ms = 30000;
         tn->task_node_priority = 150;
 
@@ -441,6 +537,7 @@ airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
     node->task_node_goal = AIRY_STRDUP("execute confirmed goal");
     node->task_node_agent_role = AIRY_STRDUP("act");
     node->task_node_role_len = 3;
+    s2_kind_fill(node);
     node->task_node_timeout_ms = 30000;
     node->task_node_priority = 150;
     plan->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
@@ -500,6 +597,7 @@ static airy_err_t grad_fallback_plan(airy_task_plan_t **out_plan)
     n->task_node_goal = AIRY_STRDUP("execute the confirmed goal");
     n->task_node_agent_role = AIRY_STRDUP("act");
     n->task_node_role_len = 3;
+    s2_kind_fill(n);
     n->task_node_inputs = (char **)AIRY_CALLOC(1, sizeof(char *));
     n->task_node_outputs = (char **)AIRY_CALLOC(1, sizeof(char *));
     if (n->task_node_inputs)
