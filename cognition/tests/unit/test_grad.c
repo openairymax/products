@@ -269,6 +269,7 @@ int main(void)
     RUN_TEST(test_run_bbad);
     RUN_TEST(test_run_exh);
     RUN_TEST(test_run_schema);
+    RUN_TEST(test_run_nsok);
     RUN_TEST(test_run_fbseed);
 
     printf("\n=== Results: %d run, %d passed, %d failed ===\n", tests_run, tests_passed,
