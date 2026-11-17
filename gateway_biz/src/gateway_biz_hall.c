@@ -218,6 +218,73 @@ static void gw_hall_walk(const char *dir, int depth, const char *tenant_filter,
 
 /* ── method implementations ───────────────────────────────────────── */
 
+static cJSON *gw_hall_entry_find(cJSON *entries, const char *exec_id)
+{
+    for (cJSON *e = entries->child; e; e = e->next) {
+        const cJSON *id = cJSON_GetObjectItem(e, "execution_id");
+        if (cJSON_IsString(id) && strcmp(id->valuestring, exec_id) == 0)
+            return e;
+    }
+    return NULL;
+}
+
+/* 看板事件回退（0.1.21 L-9）：work_hall_state.json 只记被调度器派发的任务，
+ * 同步 agent.run 不经过调度、失败与取消此前也不落终态事件，看板因此恒空
+ * 或恒挂 running。board 为空时按 hall 事件派生：同一 execution_id 以最新
+ * run_result 定终态，未出现终态即为 running。字段对齐 TUI 的
+ * HallBoardEntry 契约，不塞类型不匹配的数值 task_id。 */
+static void gw_hall_board_fill(cJSON *entries)
+{
+    char root[GW_HALL_PATH_MAX];
+    gw_hall_root(root, sizeof(root));
+
+    gw_hall_evt_list_t evts = {0};
+    gw_hall_walk(root, 0, NULL, NULL, NULL, &evts);
+    gw_hall_evt_sort(&evts);
+
+    for (size_t i = 0; i < evts.count; i++) {
+        cJSON *e = cJSON_Parse(evts.items[i].json);
+        if (!e)
+            continue;
+        const cJSON *file = cJSON_GetObjectItem(e, "file");
+        const cJSON *content = cJSON_GetObjectItem(e, "content");
+        const cJSON *tid = cJSON_GetObjectItem(file, "task_id");
+        if (!cJSON_IsString(tid) || !tid->valuestring[0]) {
+            cJSON_Delete(e);
+            continue;
+        }
+
+        cJSON *ent = gw_hall_entry_find(entries, tid->valuestring);
+        if (!ent) {
+            ent = cJSON_CreateObject();
+            if (!ent) {
+                cJSON_Delete(e);
+                break;
+            }
+            cJSON_AddStringToObject(ent, "execution_id", tid->valuestring);
+            cJSON_AddStringToObject(ent, "workflow_name", "agent.run");
+            cJSON_AddStringToObject(ent, "state", "running");
+            cJSON_AddNumberToObject(ent, "progress", 0);
+            cJSON_AddItemToArray(entries, ent);
+        }
+
+        const cJSON *ev = cJSON_GetObjectItem(content, "event");
+        if (!cJSON_IsString(ev) || strcmp(ev->valuestring, "run_result") != 0) {
+            cJSON_Delete(e);
+            continue;
+        }
+        const cJSON *st = cJSON_GetObjectItem(content, "state");
+        const cJSON *rc = cJSON_GetObjectItem(content, "rc");
+        const char *state = cJSON_IsString(st) ? st->valuestring :
+                            (cJSON_IsNumber(rc) && rc->valuedouble == 0 ? "completed" : "failed");
+        cJSON_ReplaceItemInObject(ent, "state", cJSON_CreateString(state));
+        cJSON_ReplaceItemInObject(ent, "progress",
+                                  cJSON_CreateNumber(strcmp(state, "running") == 0 ? 0 : 1));
+        cJSON_Delete(e);
+    }
+    gw_hall_evt_free_all(&evts);
+}
+
 static char *gw_hall_board(const gateway_business_ctx_t *ctx, const cJSON *id)
 {
     cJSON *result = cJSON_CreateObject();
@@ -244,6 +311,14 @@ static char *gw_hall_board(const gateway_business_ctx_t *ctx, const cJSON *id)
             }
             cJSON_Delete(state);
         }
+    }
+
+    /* 空板回退（0.1.21 L-9）：调度器未派发过任务时 board 恒空，按 hall 事件
+     * 派生；source 显式标明来源，客户端可据此区分「无任务」与「无调度」。 */
+    if (cJSON_GetArraySize(entries) == 0) {
+        gw_hall_board_fill(entries);
+        if (cJSON_GetArraySize(entries) > 0)
+            cJSON_ReplaceItemInObject(result, "source", cJSON_CreateString("hall_events"));
     }
 
     /* Live agent roster from agent_d (best effort; failure -> empty list) */
