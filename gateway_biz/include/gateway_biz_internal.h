@@ -128,6 +128,9 @@ char *handle_hall_call(cJSON *root, gateway_business_ctx_t *ctx);
 char *handle_agent_run(cJSON *root, gateway_business_ctx_t *ctx);
 char *handle_agent_cancel(cJSON *root, gateway_business_ctx_t *ctx);
 
+/* ---- gateway_biz_agent.c (task.submit 统一任务入口，C-15) ---- */
+char *handle_task_submit(cJSON *root, gateway_business_ctx_t *ctx);
+
 #ifdef __cplusplus
 }
 #endif
