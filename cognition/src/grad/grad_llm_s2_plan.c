@@ -6,7 +6,8 @@
  * @brief GRAD 模型 A（t2）计划生成域
  *
  * 目标 G + 拒绝补丁 → LLM DAG 计划 JSON → airy_task_plan_t。
- * LLM 不可用时构造保守单节点降级计划（fallback_ 前缀，engine 拒绝采纳）。
+ * 生成/解析失败默认立即 ESERVICE 并记录字段级失败详情（C-8 做法①）；
+ * 仅 grad.fallback_as_seed=1 的回退实验路径构造保守单节点降级计划。
  */
 
 #include "grad_internal.h"
@@ -81,6 +82,8 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
     size_t cap = strlen(goal_json) + 2048 + hist_len;
     if (patch_json)
         cap += strlen(patch_json);
+    if (ctx->last_detail_set)
+        cap += 512;
     char *prompt = (char *)AIRY_MALLOC(cap);
     if (!prompt) {
         AIRY_FREE(goal_json);
@@ -108,6 +111,20 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
             off += (size_t)snprintf(prompt + off, cap - off,
                                     "Do NOT reproduce the same defect. If the same defect "
                                     "recurs, state why the plan cannot avoid it.\n\n");
+            if (off >= cap)
+                off = cap - 1;
+        }
+        /* C-8 做法④：修补轮消费上一轮字段级错误文本——解析/schema 失败
+         * 的 {index, field, reason} 必须显式回喂，否则 A 只能凭驳回补丁
+         * 猜测缺陷位置，同一字段反复违例。 */
+        if (ctx->last_detail_set) {
+            off += (size_t)snprintf(prompt + off, cap - off,
+                                    "The previous plan was rejected by deterministic "
+                                    "validation at node index %d (field \"%s\", reason "
+                                    "\"%s\"). Correct exactly that field; keep the rest of "
+                                    "the graph unchanged.\n\n",
+                                    ctx->last_detail.index, ctx->last_detail.field,
+                                    ctx->last_detail.reason);
             if (off >= cap)
                 off = cap - 1;
         }
@@ -171,7 +188,7 @@ airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
     }
 
     /* C1：schema 校验前置——违例整份拒绝（EINVAL），不静默修复。
-     * s2_plan 侧对 EINVAL 走保守 fallback（q8a 语义），修复环不中断；
+     * C-8 起 s2_plan 侧默认把该失败直接上报（ESERVICE），不再降级 fallback；
      * 缺省元数据（outputs/inputs/cost）由 C4 在构造后推导补全。
      * plan_id 缺省值必须先于校验归一：否则 schema 以 "missing" 拒绝整份
      * 计划，下方的缺省构造形同虚设，launch 未带 plan_id 的合法计划会被
@@ -402,8 +419,10 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
 }
 
 /* 保守降级计划：单节点空壳，以 "fallback_" 前缀标记（engine 采纳前拒绝）。
- * P1：LLM 调用失败与 JSON 解析失败均走此降级，保证修复环不中断；
- * 任一 STRDUP/分配失败返回 ENOMEM（空壳计划不得带 NULL 节点流入下游）。 */
+ * C-8 做法②：fallback 只允许在修补轮内部占位，且必须携带最小可验元数据
+ * （1 个 output、1 个 cost 估计、`lit:` 输入），否则 C 的四路验证对
+ * 空壳无能为力、B 只能盲判。任一 STRDUP/分配失败返回 ENOMEM（空壳计划
+ * 不得带 NULL 节点流入下游）。 */
 static airy_err_t grad_fallback_plan(airy_task_plan_t **out_plan)
 {
     airy_task_plan_t *fb = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(*fb));
@@ -425,14 +444,40 @@ static airy_err_t grad_fallback_plan(airy_task_plan_t **out_plan)
     }
     n->task_node_id = AIRY_STRDUP("fallback");
     n->task_node_goal = AIRY_STRDUP("execute the confirmed goal");
-    n->task_node_agent_role = AIRY_STRDUP("agent");
-    if (!n->task_node_id || !n->task_node_goal || !n->task_node_agent_role) {
+    n->task_node_agent_role = AIRY_STRDUP("act");
+    n->task_node_role_len = 3;
+    n->task_node_inputs = (char **)AIRY_CALLOC(1, sizeof(char *));
+    n->task_node_outputs = (char **)AIRY_CALLOC(1, sizeof(char *));
+    if (n->task_node_inputs)
+        n->task_node_inputs[0] = AIRY_STRDUP("lit:seed");
+    if (n->task_node_outputs)
+        n->task_node_outputs[0] = AIRY_STRDUP("fallback_result");
+    if (n->task_node_inputs && n->task_node_inputs[0])
+        n->task_node_inputs_count = 1;
+    if (n->task_node_outputs && n->task_node_outputs[0])
+        n->task_node_outputs_count = 1;
+    n->task_node_cost_time_ms = 1000;
+    n->task_node_cost_mem_mb = 64;
+    if (!n->task_node_id || !n->task_node_goal || !n->task_node_agent_role ||
+        n->task_node_inputs_count == 0 || n->task_node_outputs_count == 0) {
         airy_task_plan_free(fb);
         return AIRY_ENOMEM;
     }
     fb->task_plan_nodes[0] = n;
     *out_plan = fb;
     return AIRY_SUCCESS;
+}
+
+/* C-8：把本轮失败落进 ctx 的字段级记忆，下一轮修补 prompt 回喂。 */
+static void grad_rec_detail(grad_llm_ctx_t *ctx, int index, const char *field,
+                            const char *reason)
+{
+    ctx->last_detail.index = index;
+    snprintf(ctx->last_detail.field, sizeof(ctx->last_detail.field), "%s",
+             field ? field : "");
+    snprintf(ctx->last_detail.reason, sizeof(ctx->last_detail.reason), "%s",
+             reason ? reason : "");
+    ctx->last_detail_set = 1;
 }
 
 airy_err_t grad_llm_s2_plan(const airy_gccp_goal_t *goal, const char *patch_json,
@@ -457,16 +502,11 @@ airy_err_t grad_llm_s2_plan(const airy_gccp_goal_t *goal, const char *patch_json
     AIRY_FREE(prompt);
 
     if (err != AIRY_SUCCESS || !plan_json) {
-        AIRY_LOG_WARN("GRAD-A: LLM plan generation failed (err=%d), conservative fallback",
-                      (int)err);
-        /* 2.1.1.4 修复：LLM 不可用时不再解析 NULL（此前 cJSON 构建下
-         * grad_parse_plan_json(NULL) 必返回 ESERVICE，降级名存实亡、GRAD
-         * 修复环遇 LLM 故障直接中断）——构造保守单节点计划继续 GRAD 环
-         * （C 验证 + B 仲裁），而非让修复循环失败。 */
-        airy_err_t ferr = grad_fallback_plan(out_plan);
-        if (ferr != AIRY_SUCCESS)
-            AIRY_LOG_WARN("GRAD-A: fallback plan construction failed (err=%d)", (int)ferr);
-        return ferr;
+        grad_rec_detail(ctx, -1, "llm",
+                        err != AIRY_SUCCESS ? "call_failed" : "empty_response");
+        AIRY_LOG_WARN("GRAD-A: LLM plan generation failed (err=%d)", (int)err);
+        AIRY_FREE(plan_json);
+        return AIRY_ESERVICE;
     }
 
     if (ctx->workspace_root && ctx->plan_id) {
@@ -490,20 +530,25 @@ airy_err_t grad_llm_s2_plan(const airy_gccp_goal_t *goal, const char *patch_json
                               plan_json_len > 4000 ? "(plan_json truncated)" : plan_json);
     }
 
-    airy_err_t parse_err = grad_parse_plan_json(plan_json, ctx->plan_id, out_plan);
+    grad_detail_t detail;
+    airy_err_t parse_err = grad_parse_plan_json_ex(plan_json, ctx->plan_id, out_plan, &detail);
     if (parse_err != AIRY_SUCCESS) {
-        /* q8a：解析失败（非法 JSON / nodes 非数组 / 空节点 / markdown 围栏
-         * 未剥）不得中断修复环——与 LLM 调用失败同等对待，走保守 fallback
-         * （engine 采纳前按 "fallback_" 前缀拒绝，保持 seed 计划）。此前
-         * parse_err 原样返回导致协调器 s2_plan 失败直接 break 整个 GRAD 环。 */
-        AIRY_LOG_WARN("GRAD-A: plan JSON parse failed (err=%d), conservative fallback",
-                      (int)parse_err);
+        grad_rec_detail(ctx, detail.index, detail.field, detail.reason);
+        AIRY_LOG_WARN("GRAD-A: plan JSON parse failed (err=%d index=%d field=%s reason=%s)",
+                      (int)parse_err, detail.index, detail.field, detail.reason);
+        AIRY_FREE(plan_json);
+        /* C-8 做法①：默认路径任何生成/解析失败都不得降级为 fallback 空壳，
+         * 否则同一字段违例会反复空转（判据禁止 rounds=3 converged=0）。
+         * 仅在 grad.fallback_as_seed=1 的回退实验路径保留保守 fallback。 */
+        if (!ctx->fallback_as_seed)
+            return AIRY_ESERVICE;
         airy_err_t ferr = grad_fallback_plan(out_plan);
         if (ferr != AIRY_SUCCESS)
             AIRY_LOG_WARN("GRAD-A: fallback plan construction failed (err=%d)", (int)ferr);
-        AIRY_FREE(plan_json);
         return ferr;
     }
+    /* 本轮计划可解析：清掉上一轮的错误记忆，避免旧字段反复回喂。 */
+    ctx->last_detail_set = 0;
     AIRY_FREE(plan_json);
     return AIRY_SUCCESS;
 }

@@ -45,12 +45,14 @@
     "{\"id\":\"S_02\",\"goal\":\"write\",\"role\":\"act\",\"depends\":[\"S_01\"]," \
     "\"inputs\":[\"S_01.ghost\"],\"outputs\":[\"report\"],\"cost_time_ms\":10}" \
     "],\"entry\":[\"S_01\"]}"
-/* A 计划：S_01↔S_02 互依赖 → E-02 死锁恒拒（优先级最高）。 */
+/* A 计划：S_01↔S_02 互依赖 → E-02 死锁恒拒（优先级最高）。role 取合法
+ * 枚举值，确保本用例走 C 判据而非 schema 违例（C-8 起 schema 违例单轮
+ * 即确定性失败，不再进入迭代耗尽路径）。 */
 #define GR_PLAN_E02                                                             \
     "{\"nodes\":["                                                              \
-    "{\"id\":\"S_01\",\"goal\":\"a\",\"role\":\"executor\",\"depends\":[\"S_02\"]," \
+    "{\"id\":\"S_01\",\"goal\":\"a\",\"role\":\"act\",\"depends\":[\"S_02\"],"   \
     "\"outputs\":[\"a.out\"],\"cost_time_ms\":10},"                             \
-    "{\"id\":\"S_02\",\"goal\":\"b\",\"role\":\"executor\",\"depends\":[\"S_01\"]," \
+    "{\"id\":\"S_02\",\"goal\":\"b\",\"role\":\"act\",\"depends\":[\"S_01\"],"   \
     "\"outputs\":[\"b.out\"],\"cost_time_ms\":10}"                              \
     "],\"entry\":[\"S_01\"]}"
 
