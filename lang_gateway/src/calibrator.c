@@ -92,6 +92,68 @@ static const char *token_family_of(const char *model)
     return "generic";
 }
 
+double cal_ratio_pooled(double sum_zh, double sum_en)
+{
+    if (!(sum_en > 0.0))
+        return 0.0;
+    return sum_zh / sum_en;
+}
+
+double cal_confidence(uint32_t samples, double dev)
+{
+    if (samples < AIRY_LANG_MIN_SAMPLES)
+        return 0.0;
+    if (dev < 0.0)
+        dev = 0.0;
+    if (dev > 0.25)
+        dev = 0.25;
+    return 1.0 - 2.0 * dev;
+}
+
+/* 单模型测量：主样本必成，备用样本失败时按单样本计（pairs=1），
+ * 离散度以封顶值表达——样本量交由 cal_confidence 显式判定充足性。 */
+static int rpc_count_tokens(const char *socket, const char *model, const char *text,
+                            int64_t *out_tokens);
+
+typedef struct {
+    int64_t sum_zh;
+    int64_t sum_en;
+    uint32_t pairs;
+    double dev;
+} cal_meas_t;
+
+static int cal_measure(const char *socket, const char *model, cal_meas_t *m)
+{
+    int64_t zh1 = 0, en1 = 0, zh2 = 0, en2 = 0;
+
+    if (rpc_count_tokens(socket, model, AIRY_LANG_ZH_SAMPLE1, &zh1) != 0 ||
+        rpc_count_tokens(socket, model, AIRY_LANG_EN_SAMPLE1, &en1) != 0 ||
+        en1 <= 0)
+        return -1;
+
+    AIRY_MEMSET(m, 0, sizeof(*m));
+    m->sum_zh = zh1;
+    m->sum_en = en1;
+    m->pairs = 1;
+    m->dev = 0.25;
+
+    if (rpc_count_tokens(socket, model, AIRY_LANG_ZH_SAMPLE2, &zh2) != 0 ||
+        rpc_count_tokens(socket, model, AIRY_LANG_EN_SAMPLE2, &en2) != 0 ||
+        en2 <= 0)
+        return 0;
+
+    m->sum_zh += zh2;
+    m->sum_en += en2;
+    m->pairs = 2;
+
+    double r1 = (double)zh1 / (double)en1;
+    double r2 = (double)zh2 / (double)en2;
+    double hi = r1 > r2 ? r1 : r2;
+    double lo = r1 < r2 ? r1 : r2;
+    m->dev = hi > 0.0 ? (hi - lo) / hi : 0.25;
+    return 0;
+}
+
 /* 经 llm_d count_tokens RPC 统计文本 token 数（按声明的分词族计数）。 */
 static int rpc_count_tokens(const char *socket, const char *model, const char *text,
                             int64_t *out_tokens)
@@ -141,8 +203,23 @@ static int rpc_count_tokens(const char *socket, const char *model, const char *t
     return 0;
 }
 
-/* 经 llm_d list_models RPC 获取全部已配置模型名。 */
-static int rpc_list_models(const char *socket, char ***out_models, size_t *out_count)
+/* 经 llm_d list_models RPC 获取模型名与其真实 provider（D-3：provider
+ * 必须回填上游声明，不再留空或继承旧画像的过期值）。 */
+typedef struct {
+    char *name;
+    char *provider;
+} cal_model_t;
+
+static void cal_models_free(cal_model_t *ms, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        AIRY_FREE(ms[i].name);
+        AIRY_FREE(ms[i].provider);
+    }
+    AIRY_FREE(ms);
+}
+
+static int rpc_list_models(const char *socket, cal_model_t **out_models, size_t *out_count)
 {
     /* The RPC client comes from the injected IPC ops table
      * (svc_common); degrade gracefully when absent. */
@@ -156,7 +233,7 @@ static int rpc_list_models(const char *socket, char ***out_models, size_t *out_c
     if (rc != 0 || !result)
         return -1;
 
-    char **models = NULL;
+    cal_model_t *models = NULL;
     size_t count = 0;
 
 #ifdef AIRY_HAS_CJSON
@@ -170,13 +247,12 @@ static int rpc_list_models(const char *socket, char ***out_models, size_t *out_c
         size_t cap = 0;
         cJSON_ArrayForEach(item, arr) {
             cJSON *name = cJSON_GetObjectItemCaseSensitive(item, "name");
+            cJSON *prov = cJSON_GetObjectItemCaseSensitive(item, "provider");
             if (!cJSON_IsString(name) || !name->valuestring)
                 continue;
             if (count >= AIRY_LANG_PROFILE_MAX) {
                 /* 越界 fail-fast（B6-1）：模型数超出画像容量，整批拒绝 */
-                for (size_t i = 0; i < count; i++)
-                    AIRY_FREE(models[i]);
-                AIRY_FREE(models);
+                cal_models_free(models, count);
                 models = NULL;
                 count = 0;
                 cJSON_Delete(root);
@@ -184,12 +260,22 @@ static int rpc_list_models(const char *socket, char ***out_models, size_t *out_c
             }
             if (count == cap) {
                 cap = cap == 0 ? 8 : cap * 2;
-                char **tmp = AIRY_REALLOC(models, cap * sizeof(char *));
+                cal_model_t *tmp = AIRY_REALLOC(models, cap * sizeof(cal_model_t));
                 if (!tmp)
                     break;
                 models = tmp;
             }
-            models[count++] = AIRY_STRDUP(name->valuestring);
+            models[count].name = AIRY_STRDUP(name->valuestring);
+            models[count].provider =
+                (cJSON_IsString(prov) && prov->valuestring)
+                    ? AIRY_STRDUP(prov->valuestring)
+                    : AIRY_STRDUP("");
+            if (!models[count].name || !models[count].provider) {
+                AIRY_FREE(models[count].name);
+                AIRY_FREE(models[count].provider);
+                break;
+            }
+            count++;
         }
     }
     cJSON_Delete(root);
@@ -254,9 +340,17 @@ int profiles_load(struct airy_lang_gateway *gw)
         cJSON *prov = cJSON_GetObjectItemCaseSensitive(item, "provider");
         cJSON *fam = cJSON_GetObjectItemCaseSensitive(item, "family");
         cJSON *cal = cJSON_GetObjectItemCaseSensitive(item, "calibrated_at");
+        cJSON *samp = cJSON_GetObjectItemCaseSensitive(item, "lang_samples");
         if (!cJSON_IsString(mid) || !mid->valuestring)
             continue;
-        airy_model_profile_t *p = &gw->profiles[gw->profile_count++];
+        size_t idx = gw->profile_count++;
+        airy_model_profile_t *p = &gw->profiles[idx];
+        /* 旧版持久化无本字段（真实样本量未知）→ 记 0，统计侧按样本不足
+         * 呈现，不用「假定充足」掩盖未知。 */
+        gw->prof_samples[idx] =
+            cJSON_IsNumber(samp) && samp->valuedouble > 0
+                ? (uint32_t)samp->valuedouble
+                : 0;
         snprintf(p->model_id, sizeof(p->model_id), "%s", mid->valuestring);
         snprintf(p->provider, sizeof(p->provider), "%s",
                  cJSON_IsString(prov) && prov->valuestring ? prov->valuestring : "");
@@ -311,6 +405,7 @@ int profiles_save(struct airy_lang_gateway *gw)
         cJSON_AddNumberToObject(item, "ratio_high", p->ratio_high);
         cJSON_AddNumberToObject(item, "ratio_low", p->ratio_low);
         cJSON_AddNumberToObject(item, "calibrated_at", (double)p->calibrated_at);
+        cJSON_AddNumberToObject(item, "lang_samples", (double)gw->prof_samples[i]);
         cJSON_AddItemToArray(arr, item);
     }
     airy_mtx_unlock(&gw->prof_lock);
@@ -346,17 +441,19 @@ int profiles_save(struct airy_lang_gateway *gw)
 #endif
 }
 
-airy_err_t airy_lang_gateway_set_profile(airy_lang_gateway_t *gw,
-                                         const airy_model_profile_t *profile)
+airy_err_t lang_prof_store(struct airy_lang_gateway *gw,
+                          const airy_model_profile_t *profile, uint32_t samples)
 {
     if (!gw || !profile)
         return AIRY_EINVAL;
 
     airy_mtx_lock(&gw->prof_lock);
     airy_model_profile_t *dst = NULL;
+    size_t idx = gw->profile_count;
     for (size_t i = 0; i < gw->profile_count; i++) {
         if (strcmp(gw->profiles[i].model_id, profile->model_id) == 0) {
             dst = &gw->profiles[i];
+            idx = i;
             break;
         }
     }
@@ -364,14 +461,25 @@ airy_err_t airy_lang_gateway_set_profile(airy_lang_gateway_t *gw,
         airy_mtx_unlock(&gw->prof_lock);
         return AIRY_EOVERFLOW;
     }
-    if (!dst)
+    if (!dst) {
         dst = &gw->profiles[gw->profile_count++];
+        idx = gw->profile_count - 1;
+    }
     *dst = *profile;
+    gw->prof_samples[idx] = samples;
     airy_mtx_unlock(&gw->prof_lock);
 
     /* 持久化在锁外执行（save 内部自行加锁快照），避免锁内文件 I/O */
     profiles_save(gw);
     return AIRY_EOK;
+}
+
+airy_err_t airy_lang_gateway_set_profile(airy_lang_gateway_t *gw,
+                                         const airy_model_profile_t *profile)
+{
+    /* 公开写入无样本上下文：样本量记 0（未知），统计侧按样本不足呈现，
+     * 不伪造「已充足」。校准器内部走 lang_prof_store 显式登记实测量。 */
+    return lang_prof_store(gw, profile, 0);
 }
 
 airy_err_t airy_lang_gateway_get_profile(airy_lang_gateway_t *gw, const char *model_id,
@@ -471,44 +579,16 @@ airy_err_t airy_lang_gateway_calibrate(airy_lang_gateway_t *gw, const char *mode
     if (!gw->llm_socket[0])
         return AIRY_ERR_NOT_FOUND;
 
-    int64_t zh1 = 0, en1 = 0, zh2 = 0, en2 = 0;
-    if (rpc_count_tokens(gw->llm_socket, model_id, AIRY_LANG_ZH_SAMPLE1, &zh1) != 0 ||
-        rpc_count_tokens(gw->llm_socket, model_id, AIRY_LANG_EN_SAMPLE1, &en1) != 0)
+    cal_meas_t m;
+    if (cal_measure(gw->llm_socket, model_id, &m) != 0)
         return AIRY_ERR_NOT_FOUND;
 
-    /* 备用样本取平均，提高稳定性；备用失败时退化为主样本 */
-    int backup_ok = 1;
-    if (rpc_count_tokens(gw->llm_socket, model_id, AIRY_LANG_ZH_SAMPLE2, &zh2) != 0 ||
-        rpc_count_tokens(gw->llm_socket, model_id, AIRY_LANG_EN_SAMPLE2, &en2) != 0) {
-        zh2 = zh1;
-        en2 = en1;
-        backup_ok = 0;
-    }
-
-    double avg_zh = (double)(zh1 + zh2) / 2.0;
-    double avg_en = (double)(en1 + en2) / 2.0;
-    if (avg_en <= 0.0)
+    double ratio = cal_ratio_pooled((double)m.sum_zh, (double)m.sum_en);
+    if (ratio <= 0.0)
         return AIRY_ERR_OVERFLOW;
-    double ratio = avg_zh / avg_en;
-
-    /* 置信度由测量质量导出（非拍值）：主/备样本 lang_ratio 的相对偏差
-     * 越小越可信；偏差封顶 0.25（置信下限 0.5），单样本（备用失败）
-     * 固定 0.6，双样本一致收敛上限 1.0。 */
-    double confidence;
-    if (!backup_ok) {
-        confidence = 0.6;
-    } else if (en1 <= 0 || en2 <= 0) {
-        confidence = 0.5;
-    } else {
-        double r1 = (double)zh1 / (double)en1;
-        double r2 = (double)zh2 / (double)en2;
-        double hi = r1 > r2 ? r1 : r2;
-        double lo = r1 < r2 ? r1 : r2;
-        double dev = hi > 0.0 ? (hi - lo) / hi : 0.25;
-        if (dev > 0.25)
-            dev = 0.25;
-        confidence = 1.0 - 2.0 * dev;
-    }
+    /* 置信度只由样本量与主备离散度导出；样本不足（备用样本失败）时
+     * 返回 0 并在统计侧显式标注，不再以 0.5/0.6 冒充可信。 */
+    double confidence = cal_confidence(m.pairs, m.dev);
 
     /* 推断 family/provider（复用既有画像字段，缺失时启发式）；路由阈值
      * 同源继承（V6.3）：已有画像保留其阈值，新画像以网关种子为初值 */
@@ -542,7 +622,55 @@ airy_err_t airy_lang_gateway_calibrate(airy_lang_gateway_t *gw, const char *mode
     airy_mtx_lock(&gw->prof_lock);
     gw->calibrate_count++;
     airy_mtx_unlock(&gw->prof_lock);
-    return airy_lang_gateway_set_profile(gw, &p);
+    return lang_prof_store(gw, &p, m.pairs);
+}
+
+/* per-family 校准（D-3）：先把同族模型的样本池化，再以族合并比率与
+ * 族样本量回写每个成员画像；provider 取 list_models 的真实声明。 */
+typedef struct {
+    char family[64];
+    char provider[64];
+    double sum_zh;
+    double sum_en;
+    double min_r;
+    double max_r;
+    uint32_t samples;
+} cal_fam_t;
+
+typedef struct {
+    char *name;
+    char *provider;
+    char family[64];
+    cal_meas_t m;
+    int ok;
+} cal_row_t;
+
+static cal_fam_t *fam_find(cal_fam_t *fams, size_t nfam, const char *family)
+{
+    for (size_t i = 0; i < nfam; i++) {
+        if (strcmp(fams[i].family, family) == 0)
+            return &fams[i];
+    }
+    return NULL;
+}
+
+static void fam_add(cal_fam_t *fam, const cal_row_t *row)
+{
+    double r = cal_ratio_pooled((double)row->m.sum_zh, (double)row->m.sum_en);
+
+    if (fam->samples == 0) {
+        snprintf(fam->provider, sizeof(fam->provider), "%s", row->provider);
+        fam->min_r = r;
+        fam->max_r = r;
+    } else {
+        if (r < fam->min_r)
+            fam->min_r = r;
+        if (r > fam->max_r)
+            fam->max_r = r;
+    }
+    fam->sum_zh += (double)row->m.sum_zh;
+    fam->sum_en += (double)row->m.sum_en;
+    fam->samples += row->m.pairs;
 }
 
 airy_err_t airy_lang_gateway_calibrate_all(airy_lang_gateway_t *gw, uint32_t *out_count)
@@ -556,7 +684,7 @@ airy_err_t airy_lang_gateway_calibrate_all(airy_lang_gateway_t *gw, uint32_t *ou
         return AIRY_ERR_NOT_FOUND;
     }
 
-    char **models = NULL;
+    cal_model_t *models = NULL;
     size_t count = 0;
     if (rpc_list_models(gw->llm_socket, &models, &count) != 0) {
         if (out_count)
@@ -564,15 +692,95 @@ airy_err_t airy_lang_gateway_calibrate_all(airy_lang_gateway_t *gw, uint32_t *ou
         return AIRY_ERR_NOT_FOUND;
     }
 
+    cal_row_t *rows = AIRY_CALLOC(count, sizeof(cal_row_t));
+    cal_fam_t *fams = AIRY_CALLOC(count, sizeof(cal_fam_t));
+    size_t nfam = 0;
     uint32_t ok = 0;
+
+    if (!rows || !fams) {
+        AIRY_FREE(rows);
+        AIRY_FREE(fams);
+        cal_models_free(models, count);
+        if (out_count)
+            *out_count = 0;
+        return AIRY_ERR_OVERFLOW;
+    }
+
+    /* 回合一：逐模型采样，按族池化 */
     for (size_t i = 0; i < count; i++) {
         if (cal_should_stop(gw))
             break; /* 停机请求：放弃剩余模型，回合上界受控 */
-        if (airy_lang_gateway_calibrate(gw, models[i]) == AIRY_EOK)
-            ok++;
-        AIRY_FREE(models[i]);
+        rows[i].name = models[i].name;
+        rows[i].provider = models[i].provider;
+        snprintf(rows[i].family, sizeof(rows[i].family), "%s", "Other");
+        family_from_model(rows[i].name,
+                          rows[i].provider[0] ? rows[i].provider : NULL,
+                          rows[i].family, sizeof(rows[i].family));
+        if (cal_measure(gw->llm_socket, rows[i].name, &rows[i].m) != 0) {
+            rows[i].ok = 0;
+            continue;
+        }
+        rows[i].ok = 1;
+        cal_fam_t *fam = fam_find(fams, nfam, rows[i].family);
+        if (!fam && nfam < count) {
+            fam = &fams[nfam++];
+            snprintf(fam->family, sizeof(fam->family), "%s", rows[i].family);
+        }
+        if (fam)
+            fam_add(fam, &rows[i]);
     }
-    AIRY_FREE(models);
+
+    /* 回合二：以族合并事实回写成员画像 */
+    for (size_t i = 0; i < count; i++) {
+        if (!rows[i].ok || cal_should_stop(gw))
+            continue;
+        cal_fam_t *fam = fam_find(fams, nfam, rows[i].family);
+        if (!fam || fam->samples == 0)
+            continue;
+
+        double ratio = cal_ratio_pooled(fam->sum_zh, fam->sum_en);
+        if (ratio <= 0.0)
+            continue;
+        double dev = fam->max_r > 0.0 ? (fam->max_r - fam->min_r) / fam->max_r : 0.25;
+
+        char provider[64] = "";
+        double ratio_high = gw->ratio_high;
+        double ratio_low = gw->ratio_low;
+        airy_model_profile_t old;
+        if (airy_lang_gateway_get_profile(gw, rows[i].name, &old) == AIRY_EOK) {
+            snprintf(provider, sizeof(provider), "%s", old.provider);
+            if (old.ratio_high > 0.0)
+                ratio_high = old.ratio_high;
+            if (old.ratio_low > 0.0)
+                ratio_low = old.ratio_low;
+        }
+        if (rows[i].provider[0])
+            snprintf(provider, sizeof(provider), "%s", rows[i].provider);
+
+        airy_model_profile_t p;
+        AIRY_MEMSET(&p, 0, sizeof(p));
+        snprintf(p.model_id, sizeof(p.model_id), "%s", rows[i].name);
+        snprintf(p.provider, sizeof(p.provider), "%s", provider);
+        snprintf(p.family, sizeof(p.family), "%s", fam->family);
+        p.native_lang = infer_native_lang(fam->family, provider, ratio);
+        p.lang_ratio = ratio;
+        p.lang_confidence = cal_confidence(fam->samples, dev);
+        p.ratio_high = ratio_high;
+        p.ratio_low = ratio_low;
+        p.calibrated_at = (uint64_t)time(NULL);
+        if (lang_prof_store(gw, &p, fam->samples) == AIRY_EOK)
+            ok++;
+    }
+
+    if (ok > 0) {
+        airy_mtx_lock(&gw->prof_lock);
+        gw->calibrate_count += ok;
+        airy_mtx_unlock(&gw->prof_lock);
+    }
+
+    AIRY_FREE(rows);
+    AIRY_FREE(fams);
+    cal_models_free(models, count);
 
     if (out_count)
         *out_count = ok;

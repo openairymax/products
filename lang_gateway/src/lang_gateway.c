@@ -245,18 +245,23 @@ int airy_lang_gateway_tick(airy_lang_gateway_t *gw)
     "\"instruction_count\":%u,\"recalibrate_interval\":%u,\"profiles\":["
 
 /* 单条画像 JSON；buf 为 NULL 时仅返回所需长度（两遍法第一遍）。
- * ratio_high/ratio_low 为路由阈值（V6.3 同源画像，可观测验证）。 */
-static int profile_to_json(char *buf, size_t cap, const airy_model_profile_t *p)
+ * ratio_high/ratio_low 为路由阈值（V6.3 同源画像，可观测验证）。
+ * lang_samples/lang_status（D-3）：样本量不足阈值时显式标注 insufficient，
+ * 不以 0.5 置信度冒充有效统计。 */
+static int profile_to_json(char *buf, size_t cap, const airy_model_profile_t *p,
+                           uint32_t samples)
 {
     return snprintf(buf, cap,
                     "{\"model_id\":\"%s\",\"provider\":\"%s\",\"family\":\"%s\","
                     "\"lang_ratio\":%.3f,\"lang_confidence\":%.3f,"
                     "\"ratio_high\":%.2f,\"ratio_low\":%.2f,"
-                    "\"native_lang\":\"%s\",\"calibrated_at\":%llu}",
+                    "\"native_lang\":\"%s\",\"calibrated_at\":%llu,"
+                    "\"lang_samples\":%u,\"lang_status\":\"%s\"}",
                     p->model_id, p->provider, p->family, p->lang_ratio,
                     p->lang_confidence, p->ratio_high, p->ratio_low,
                     p->native_lang == AIRY_LANG_ZH ? "zh" : "en",
-                    (unsigned long long)p->calibrated_at);
+                    (unsigned long long)p->calibrated_at, samples,
+                    samples >= AIRY_LANG_MIN_SAMPLES ? "ok" : "insufficient");
 }
 
 airy_err_t airy_lang_gateway_stats(airy_lang_gateway_t *gw, char **out_json)
@@ -276,7 +281,7 @@ airy_err_t airy_lang_gateway_stats(airy_lang_gateway_t *gw, char **out_json)
                                    gw->recalibrate_interval) + 3 /* ]} + NUL */;
 
     for (size_t i = 0; i < gw->profile_count; i++) {
-        int n = profile_to_json(NULL, 0, &gw->profiles[i]);
+        int n = profile_to_json(NULL, 0, &gw->profiles[i], gw->prof_samples[i]);
         if (n < 0) {
             airy_mtx_unlock(&gw->prof_lock);
             return AIRY_EINVAL;
@@ -299,7 +304,8 @@ airy_err_t airy_lang_gateway_stats(airy_lang_gateway_t *gw, char **out_json)
     for (size_t i = 0; i < gw->profile_count; i++) {
         if (i > 0)
             buf[off++] = ',';
-        off += (size_t)profile_to_json(buf + off, need - off, &gw->profiles[i]);
+        off += (size_t)profile_to_json(buf + off, need - off, &gw->profiles[i],
+                                      gw->prof_samples[i]);
     }
     AIRY_MEMCPY(buf + off, "]}", 3); /* 含终止符：校准状态必须完整可查，不得截断 */
 
