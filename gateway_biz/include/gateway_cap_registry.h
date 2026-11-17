@@ -33,6 +33,7 @@ typedef enum {
     GW_CAP_KIND_TOOL_APPROVE,  /* tool.pending / tool.approve 审批特殊处理 */
     GW_CAP_KIND_HALL,          /* hall.* 网关内实现（任务看板/事件流/决策链） */
     GW_CAP_KIND_AGENT_RUN,     /* agent.run / agent.cancel 网关内编排 */
+    GW_CAP_KIND_TASK_SUBMIT,   /* task.submit 统一任务入口（C-15，网关内编排） */
 } gw_cap_kind_t;
 
 /* 能力注册项（0.1.19：由 gateway/.manifest 构建期生成） */
