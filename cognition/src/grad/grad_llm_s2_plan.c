@@ -64,6 +64,33 @@ char *grad_goal_to_json(const airy_gccp_goal_t *goal, const grad_llm_ctx_t *ctx)
 }
 
 /**
+ * @brief 字段级违规的合法形态提示（C-9 做法③：回喂不止位置，还给可照抄的形态）。
+ *
+ * @ownership return: NONE（静态串）
+ */
+static const char *grad_field_hint(const char *field)
+{
+    if (!field)
+        return NULL;
+    if (strcmp(field, "inputs") == 0)
+        return "each entry must be \"lit:<name>\" or \"<producer_id>.<artifact>\", "
+               "where producer_id is in this node's transitive depends closure and "
+               "lists <artifact> in its outputs";
+    if (strcmp(field, "role") == 0)
+        return "one of plan, retrieve, reason, act, verify";
+    if (strcmp(field, "outputs") == 0)
+        return "unique non-empty artifact names ([A-Za-z0-9_.-]); no other node may "
+               "declare the same artifact";
+    if (strcmp(field, "depends") == 0)
+        return "existing node ids only; self references are forbidden";
+    if (strcmp(field, "id") == 0)
+        return "unique node id matching [A-Za-z0-9_-]{1,48}";
+    if (strcmp(field, "goal") == 0)
+        return "a non-empty string of at most 512 characters";
+    return NULL;
+}
+
+/**
  * @brief Build model A's user prompt (goal G + rejection patch + round history).
  *
  * C13 决策③：patch 分支注入 "Previous rounds" 段（≤3 条，来自
@@ -85,7 +112,7 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
     if (patch_json)
         cap += strlen(patch_json);
     if (ctx->last_detail_set)
-        cap += 512;
+        cap += 1024;
     char *prompt = (char *)AIRY_MALLOC(cap);
     if (!prompt) {
         AIRY_FREE(goal_json);
@@ -116,19 +143,44 @@ static char *grad_s2_build_prompt(const grad_llm_ctx_t *ctx, const airy_gccp_goa
             if (off >= cap)
                 off = cap - 1;
         }
-        /* C-8 做法④：修补轮消费上一轮字段级错误文本——解析/schema 失败
-         * 的 {index, field, reason} 必须显式回喂，否则 A 只能凭驳回补丁
-         * 猜测缺陷位置，同一字段反复违例。 */
+        /* C-8 做法④ / C-9 做法③：修补轮消费上一轮字段级错误文本——解析/
+         * schema 失败的 {index, field, reason} 必须显式回喂，并附该字段
+         * 的合法形态（只给位置不给形态，模型仍只能猜）。同一字段连续两轮
+         * 违例时追加格式强化段（判据：同一 field 不得连续两轮违例）。 */
         if (ctx->last_detail_set) {
-            off += (size_t)snprintf(prompt + off, cap - off,
-                                    "The previous plan was rejected by deterministic "
-                                    "validation at node index %d (field \"%s\", reason "
-                                    "\"%s\"). Correct exactly that field; keep the rest of "
-                                    "the graph unchanged.\n\n",
-                                    ctx->last_detail.index, ctx->last_detail.field,
-                                    ctx->last_detail.reason);
+            if (ctx->last_detail.index >= 0)
+                off += (size_t)snprintf(prompt + off, cap - off,
+                                        "The previous plan was rejected by deterministic "
+                                        "validation at node index %d (field \"%s\", reason "
+                                        "\"%s\"). Correct exactly that field; keep the rest of "
+                                        "the graph unchanged.\n\n",
+                                        ctx->last_detail.index, ctx->last_detail.field,
+                                        ctx->last_detail.reason);
+            else
+                off += (size_t)snprintf(prompt + off, cap - off,
+                                        "The previous plan was rejected by deterministic "
+                                        "validation at document level (field \"%s\", reason "
+                                        "\"%s\"). Fix the document structure; keep the rest of "
+                                        "the graph unchanged.\n\n",
+                                        ctx->last_detail.field, ctx->last_detail.reason);
             if (off >= cap)
                 off = cap - 1;
+            const char *hint = grad_field_hint(ctx->last_detail.field);
+            if (hint) {
+                off += (size_t)snprintf(prompt + off, cap - off,
+                                        "Legal form for field \"%s\": %s.\n\n",
+                                        ctx->last_detail.field, hint);
+                if (off >= cap)
+                    off = cap - 1;
+            }
+            if (ctx->detail_repeat) {
+                off += (size_t)snprintf(prompt + off, cap - off,
+                                        "This field has violated in two consecutive rounds. "
+                                        "Re-read the schema samples above and emit exactly "
+                                        "the legal form; do not vary the shape.\n\n");
+                if (off >= cap)
+                    off = cap - 1;
+            }
         }
         if (ctx->incremental_patch) {
             /* T3（0.1.20）：Δ 渲染契约——只回受影响节点子集（含新增生产
@@ -470,13 +522,16 @@ static airy_err_t grad_fallback_plan(airy_task_plan_t **out_plan)
     return AIRY_SUCCESS;
 }
 
-/* C-8：把本轮失败落进 ctx 的字段级记忆，下一轮修补 prompt 回喂。 */
+/* C-8：把本轮失败落进 ctx 的字段级记忆，下一轮修补 prompt 回喂。
+ * C-9：同一 field 连续两轮违例时置 detail_repeat（下一轮 prompt 强化）。 */
 static void grad_rec_detail(grad_llm_ctx_t *ctx, int index, const char *field,
                             const char *reason)
 {
+    const char *f = field ? field : "";
+    ctx->detail_repeat =
+        (ctx->last_detail_set && f[0] && strcmp(ctx->last_detail.field, f) == 0) ? 1 : 0;
     ctx->last_detail.index = index;
-    snprintf(ctx->last_detail.field, sizeof(ctx->last_detail.field), "%s",
-             field ? field : "");
+    snprintf(ctx->last_detail.field, sizeof(ctx->last_detail.field), "%s", f);
     snprintf(ctx->last_detail.reason, sizeof(ctx->last_detail.reason), "%s",
              reason ? reason : "");
     ctx->last_detail_set = 1;
@@ -551,6 +606,7 @@ airy_err_t grad_llm_s2_plan(const airy_gccp_goal_t *goal, const char *patch_json
     }
     /* 本轮计划可解析：清掉上一轮的错误记忆，避免旧字段反复回喂。 */
     ctx->last_detail_set = 0;
+    ctx->detail_repeat = 0;
     AIRY_FREE(plan_json);
     return AIRY_SUCCESS;
 }
