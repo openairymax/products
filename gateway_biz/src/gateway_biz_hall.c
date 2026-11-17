@@ -269,7 +269,41 @@ static void gw_hall_board_fill(cJSON *entries)
         }
 
         const cJSON *ev = cJSON_GetObjectItem(content, "event");
-        if (!cJSON_IsString(ev) || strcmp(ev->valuestring, "run_result") != 0) {
+        if (!cJSON_IsString(ev) || !ev->valuestring) {
+            cJSON_Delete(e);
+            continue;
+        }
+
+        /* C-18：账本同源后，终态由 agent_d 的 task_state 事件给出
+         * （completed/failed/cancelled），progress 事件给出过程进度；
+         * run_result 仅作旧数据兼容。事件已按 (ts_utc, seq) 排序，
+         * 后者自然覆盖前者。 */
+        if (strcmp(ev->valuestring, "task_state") == 0) {
+            const cJSON *st = cJSON_GetObjectItem(content, "state");
+            const cJSON *pg = cJSON_GetObjectItem(content, "progress");
+            if (cJSON_IsString(st) && st->valuestring) {
+                const char *state = st->valuestring;
+                bool terminal = strcmp(state, "completed") == 0 ||
+                                strcmp(state, "failed") == 0 ||
+                                strcmp(state, "cancelled") == 0;
+                cJSON_ReplaceItemInObject(ent, "state", cJSON_CreateString(
+                                                              terminal ? state : "running"));
+                cJSON_ReplaceItemInObject(
+                    ent, "progress",
+                    cJSON_CreateNumber(cJSON_IsNumber(pg) ? pg->valuedouble : (terminal ? 1 : 0)));
+            }
+            cJSON_Delete(e);
+            continue;
+        }
+        if (strcmp(ev->valuestring, "issue") == 0) {
+            /* 失败先落 issue、终态随后到达；这里只保证看板不会漏掉失败。 */
+            const cJSON *st = cJSON_GetObjectItem(ent, "state");
+            if (!cJSON_IsString(st) || strcmp(st->valuestring, "running") == 0)
+                cJSON_ReplaceItemInObject(ent, "state", cJSON_CreateString("failed"));
+            cJSON_Delete(e);
+            continue;
+        }
+        if (strcmp(ev->valuestring, "run_result") != 0) {
             cJSON_Delete(e);
             continue;
         }
@@ -313,13 +347,17 @@ static char *gw_hall_board(const gateway_business_ctx_t *ctx, const cJSON *id)
         }
     }
 
-    /* 空板回退（0.1.21 L-9）：调度器未派发过任务时 board 恒空，按 hall 事件
-     * 派生；source 显式标明来源，客户端可据此区分「无任务」与「无调度」。 */
-    if (cJSON_GetArraySize(entries) == 0) {
-        gw_hall_board_fill(entries);
-        if (cJSON_GetArraySize(entries) > 0)
-            cJSON_ReplaceItemInObject(result, "source", cJSON_CreateString("hall_events"));
-    }
+    /* C-18：看板与 replay 同源。state 文件只记被调度器派发的任务，而
+     * 同步 task.submit 不经过调度，因此事件派生必须始终执行并与 state
+     * 合并（state 条目优先建条目，事件补齐状态/进度），不能只在空板时
+     * 回退——否则一份陈旧 state 会把新任务全部遮住。 */
+    bool from_state = cJSON_GetArraySize(entries) > 0;
+    gw_hall_board_fill(entries);
+    if (!from_state && cJSON_GetArraySize(entries) > 0)
+        cJSON_ReplaceItemInObject(result, "source", cJSON_CreateString("hall_events"));
+    else if (from_state && cJSON_GetArraySize(entries) > 0)
+        cJSON_ReplaceItemInObject(result, "source",
+                                  cJSON_CreateString(GW_HALL_STATE_REL "+hall_events"));
 
     /* Live agent roster from agent_d (best effort; failure -> empty list) */
     cJSON *agents = cJSON_CreateArray();
