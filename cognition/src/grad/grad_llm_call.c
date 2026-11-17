@@ -14,6 +14,108 @@
 
 #include "airy_llm_ops.h"
 
+/* C-9：剥围栏失败时的原文归因长度（前缀字节数） */
+#define GRAD_FENCE_PROBE_MAX 256
+
+static int grad_ws(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+/* 首尾空白收缩（返回区间内的左闭右开视图） */
+static void grad_trim(const char **ps, const char **pe)
+{
+    const char *s = *ps;
+    const char *e = *pe;
+    while (s < e && grad_ws(*s))
+        s++;
+    while (e > s && grad_ws(e[-1]))
+        e--;
+    *ps = s;
+    *pe = e;
+}
+
+/* C-9 做法①：响应提取——```json 围栏、首尾空白、JSON 外解释文字三段剥离。
+ * 围栏开启但未闭合时不得猜内容（原文按样返回，记原文前 256 B 归因）；
+ * 剥后仍无 JSON 结构则原样 trim 返回，由解析器给出语法失败。 */
+char *grad_extract_json_body(const char *text, size_t len, size_t *out_len, int *stripped)
+{
+    if (out_len)
+        *out_len = 0;
+    if (stripped)
+        *stripped = 0;
+    if (!text)
+        return NULL;
+
+    const char *s = text;
+    const char *e = text + len;
+    grad_trim(&s, &e);
+
+    /* ① 代码围栏：```[lang]\n ... \n``` */
+    if (e - s >= 3 && s[0] == '`' && s[1] == '`' && s[2] == '`') {
+        const char *nl = s;
+        while (nl < e && *nl != '\n')
+            nl++;
+        const char *close = NULL;
+        if (nl < e) {
+            for (const char *q = nl + 1; q + 3 <= e; q++) {
+                if (q[0] == '`' && q[1] == '`' && q[2] == '`') {
+                    close = q;
+                    break;
+                }
+            }
+        }
+        if (close) {
+            s = nl + 1;
+            e = close;
+            grad_trim(&s, &e);
+            if (stripped)
+                *stripped = 1;
+        } else {
+            AIRY_LOG_WARN("GRAD-LLM: unterminated code fence, raw head: %.*s",
+                          GRAD_FENCE_PROBE_MAX, text);
+        }
+    }
+
+    /* ② JSON 外解释文字：取首个 '{' 到最后一个 '}' 的区间 */
+    if (s < e && (*s != '{' || e[-1] != '}')) {
+        const char *b = NULL;
+        const char *c = NULL;
+        for (const char *q = s; q < e; q++) {
+            if (*q == '{') {
+                b = q;
+                break;
+            }
+        }
+        if (b) {
+            for (const char *q = e; q > b; q--) {
+                if (q[-1] == '}') {
+                    c = q;
+                    break;
+                }
+            }
+        }
+        if (b && c && c > b) {
+            s = b;
+            e = c;
+            grad_trim(&s, &e);
+            if (stripped)
+                *stripped = 1;
+        }
+    }
+
+    size_t n = (size_t)(e - s);
+    char *out = (char *)AIRY_MALLOC(n + 1);
+    if (!out)
+        return NULL;
+    if (n)
+        __builtin_memcpy(out, s, n);
+    out[n] = '\0';
+    if (out_len)
+        *out_len = n;
+    return out;
+}
+
 airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *user,
                          const char *model, airy_grad_role_e role, char **out_text,
                          size_t *out_len)
@@ -112,16 +214,27 @@ airy_err_t grad_llm_call(grad_llm_ctx_t *ctx, const char *system, const char *us
         return AIRY_ESERVICE;
     }
 
-    size_t len = strlen(resp->choices[0].content);
-    char *text = (char *)AIRY_MALLOC(len + 1);
+    /* C-9 做法①：响应提取先剥围栏/空白/解释文字再交给下游解析器；
+     * fence_strip_off=1 仅用于回退对比实验（原文直送）。 */
+    const char *raw = resp->choices[0].content;
+    size_t len = 0;
+    char *text;
+    if (ctx->fence_strip_off) {
+        len = strlen(raw);
+        text = (char *)AIRY_MALLOC(len + 1);
+        if (text) {
+            __builtin_memcpy(text, raw, len);
+            text[len] = '\0';
+        }
+    } else {
+        text = grad_extract_json_body(raw, strlen(raw), &len, NULL);
+    }
     if (!text) {
         if (llm_ops && llm_ops->response_free)
             llm_ops->response_free(resp);
         grad_ctxb_sem_release();
         return AIRY_ENOMEM;
     }
-    __builtin_memcpy(text, resp->choices[0].content, len);
-    text[len] = '\0';
 
     /* 0.1.20 B1-e：真实 token 消耗按调用角色分槽累计（思考 token 保留），
      * 供 feedback / 成本复算区分 prefill/decode 归属模型 A/B。
