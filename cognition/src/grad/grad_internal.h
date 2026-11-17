@@ -391,6 +391,12 @@ typedef struct grad_llm_ctx {
 
     const char *plan_id;
 
+    /* C-16：本轮工具目录快照（BORROW）。非 NULL 时计划节点的显式
+     * handler 必须命中该集合；NULL 表示调用方未提供目录，保持纯结构
+     * 校验。装配点见 grad_run()。 */
+    const char *const *allowed_tools;
+    size_t allowed_tool_count;
+
     void *chain_log;
 
     uint32_t round_index;
@@ -548,6 +554,10 @@ airy_err_t grad_parse_plan_json(const char *json, const char *plan_id,
  * 整份结构错误，否则为 nodes[] 下标）。 */
 airy_err_t grad_parse_plan_json_ex(const char *json, const char *plan_id,
                                    airy_task_plan_t **out_plan, grad_detail_t *detail);
+/* C-16：解析同时按工具目录快照校验节点 handler（tools 可为 NULL）。 */
+airy_err_t grad_parse_plan_json_ex_tools(const char *json, const char *plan_id,
+                                         const char *const *tools, size_t ntools,
+                                         airy_task_plan_t **out_plan, grad_detail_t *detail);
 
 /* plan_metadata.c — 缺省元数据推导（0.1.20 C4）：只补缺省不覆盖显式值 */
 size_t grad_plan_metadata_fill(airy_task_plan_t *plan);

@@ -199,6 +199,35 @@ void test_schema_inputs(void)
     TEST_PASS("inputs closure semantics enforced");
 }
 
+/* C-16：显式 handler 必须来自本轮工具目录快照；NULL 快照保持纯结构校验 */
+void test_schema_tool_catalog(void)
+{
+    const char *j =
+        "{\"nodes\":[{\"id\":\"A\",\"goal\":\"g\",\"role\":\"act\","
+        "\"handler\":\"fs_read\",\"params\":{\"path\":\"a\"},\"kind\":\"exec\"}]}";
+    cJSON *root = cJSON_Parse(j);
+    TEST_CHECK(root != NULL, "catalog plan parses");
+    grad_schema_err_t err;
+    const char *allow[] = {"fs_read", "shell_run"};
+    const char *other[] = {"shell_run"};
+
+    TEST_CHECK(grad_plan_schema_validate_tools(root, "p", allow, 2, &err) == AIRY_SUCCESS,
+               "handler inside snapshot accepted");
+    TEST_CHECK(grad_plan_schema_validate_tools(root, "p", other, 1, &err) == AIRY_EINVAL &&
+                   err.index == 0 && strcmp(err.field, "handler") == 0 &&
+                   strcmp(err.reason, "unknown_tool") == 0,
+               "handler outside snapshot rejected as unknown_tool");
+    /* 空快照（tools 非 NULL、ntools=0）与「未提供快照」语义不同 */
+    TEST_CHECK(grad_plan_schema_validate_tools(root, "p", allow, 0, &err) == AIRY_EINVAL &&
+                   strcmp(err.reason, "unknown_tool") == 0,
+               "empty snapshot rejects explicit handler");
+    TEST_CHECK(grad_plan_schema_validate_tools(root, "p", NULL, 0, &err) == AIRY_SUCCESS,
+               "no snapshot keeps structural validation");
+
+    cJSON_Delete(root);
+    TEST_PASS("tool catalog snapshot enforced");
+}
+
 typedef struct {
     const char *reason;
     const char *field;

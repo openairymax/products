@@ -194,11 +194,26 @@ static bool grad_input_ok(const cJSON *nodes, int idx, const char *input,
     return true;
 }
 
+/* C-16：工具目录快照成员判定。tools=NULL 表示未提供快照（保持既有纯
+ * 结构校验）；tools 非 NULL 而 ntools=0 表示本轮目录为空——任何显式
+ * handler 都不可用，不能当作「未提供」。 */
+static bool grad_tool_allowed(const char *name, const char *const *tools, size_t ntools)
+{
+    if (!tools)
+        return true;
+    for (size_t i = 0; i < ntools; i++) {
+        if (tools[i] && strcmp(tools[i], name) == 0)
+            return true;
+    }
+    return false;
+}
+
 /* C-12：执行映射面（handler/params/kind）。三者均可缺省——handler 缺省
  * 由角色映射补（act → shell_run），kind 缺省按角色推断，故本层只判「给
  * 出即须合规」。kind=exec 必须有落点：显式 handler，或 role=act 走缺省
  * 映射；二者皆无即缺陷计划，schema 层直接拒绝，不放进执行层空转。 */
-static bool grad_exec_ok(const cJSON *nd, grad_schema_err_t *err, int idx)
+static bool grad_exec_ok(const cJSON *nd, grad_schema_err_t *err, int idx,
+                         const char *const *tools, size_t ntools)
 {
     static const char *const kinds[] = {"exec", "verify", "report"};
     cJSON *handler = cJSON_GetObjectItem(nd, "handler");
@@ -211,6 +226,14 @@ static bool grad_exec_ok(const cJSON *nd, grad_schema_err_t *err, int idx)
         (!cJSON_IsString(handler) ||
          !grad_pat(handler->valuestring, GRAD_HANDLER_MAX, true, true))) {
         grad_serr_set(err, idx, "handler", "pattern");
+        return false;
+    }
+    /* C-16：节点 tool_id 必须来自本轮目录快照，未知工具当场拒绝，不
+     * 让计划进入执行层才发现无处理器。缺省 handler（role=act 映射
+     * shell_run）不在此判定：计划未点名工具，由执行层按可用性处理。 */
+    if (has_handler && cJSON_IsString(handler) &&
+        !grad_tool_allowed(handler->valuestring, tools, ntools)) {
+        grad_serr_set(err, idx, "handler", "unknown_tool");
         return false;
     }
     if (params && !cJSON_IsNull(params) && !cJSON_IsString(params) &&
@@ -247,7 +270,8 @@ static bool grad_exec_ok(const cJSON *nd, grad_schema_err_t *err, int idx)
 }
 
 /* JSON 层：单节点字段域检查（独立可判定项，不跨节点） */
-static bool grad_check_node(const cJSON *nd, grad_schema_err_t *err, int idx)
+static bool grad_check_node(const cJSON *nd, grad_schema_err_t *err, int idx,
+                            const char *const *tools, size_t ntools)
 {
     cJSON *id = cJSON_GetObjectItem(nd, "id");
     if (!cJSON_IsString(id) || !grad_pat(id->valuestring, GRAD_NODE_ID_MAX, false, true)) {
@@ -265,7 +289,7 @@ static bool grad_check_node(const cJSON *nd, grad_schema_err_t *err, int idx)
         grad_serr_set(err, idx, "role", "enum");
         return false;
     }
-    if (!grad_exec_ok(nd, err, idx))
+    if (!grad_exec_ok(nd, err, idx, tools, ntools))
         return false;
     cJSON *deps = cJSON_GetObjectItem(nd, "depends");
     if (deps && !cJSON_IsNull(deps) &&
@@ -387,8 +411,9 @@ static bool grad_struct_ok(const cJSON *nodes, int n, grad_schema_err_t *err)
     return true;
 }
 
-airy_err_t grad_plan_schema_validate(const cJSON *root, const char *plan_id,
-                                     grad_schema_err_t *err)
+static airy_err_t grad_plan_validate_impl(const cJSON *root, const char *plan_id,
+                                          const char *const *tools, size_t ntools,
+                                          grad_schema_err_t *err)
 {
     if (err) {
         err->index = -1;
@@ -421,7 +446,7 @@ airy_err_t grad_plan_schema_validate(const cJSON *root, const char *plan_id,
             grad_serr_set(err, i, "node", "type");
             return AIRY_EINVAL;
         }
-        if (!grad_check_node(nd, err, i))
+        if (!grad_check_node(nd, err, i, tools, ntools))
             return AIRY_EINVAL;
     }
     if (!grad_struct_ok(nodes, n, err))
@@ -444,6 +469,20 @@ airy_err_t grad_plan_schema_validate(const cJSON *root, const char *plan_id,
         }
     }
     return AIRY_SUCCESS;
+}
+
+airy_err_t grad_plan_schema_validate_tools(const cJSON *root, const char *plan_id,
+                                           const char *const *tools, size_t ntools,
+                                           grad_schema_err_t *err)
+{
+    return grad_plan_validate_impl(root, plan_id, tools, ntools, err);
+}
+
+airy_err_t grad_plan_schema_validate(const cJSON *root, const char *plan_id,
+                                     grad_schema_err_t *err)
+{
+    /* 无目录快照 = 仅结构校验（既有调用点语义不变）。 */
+    return grad_plan_validate_impl(root, plan_id, NULL, 0, err);
 }
 
 #endif /* AIRY_HAS_CJSON */

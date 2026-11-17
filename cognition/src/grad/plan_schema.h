@@ -107,6 +107,29 @@ typedef struct grad_schema_err {
 airy_err_t grad_plan_schema_validate(const cJSON *root, const char *plan_id,
                                      grad_schema_err_t *err);
 
+/**
+ * @brief 校验计划 JSON 文档，并约束节点 handler 落在工具目录快照内（C-16）。
+ *
+ * 与 grad_plan_schema_validate 同一套结构规则，额外要求每个显式 handler
+ * 命中 tools 快照；未知工具按字段级 reason="unknown_tool" 拒绝，避免计划
+ * 进入执行层才暴露无处理器。
+ *
+ * @param root [in] 计划文档（non-NULL, BORROW）
+ * @param plan_id [in] 计划标识（同上）
+ * @param tools [in] 本轮可用工具名快照（BORROW；NULL 表示未提供快照，
+ *                   退化为纯结构校验；非 NULL 且 ntools=0 表示目录为空，
+ *                   任何显式 handler 都不可用）
+ * @param ntools [in] tools 元素个数
+ * @param err [out] 违例定位（可为 NULL）
+ * @return AIRY_SUCCESS 合规；AIRY_EINVAL 违例
+ *
+ * @ownership err: NONE
+ * @threadsafe yes（纯函数）
+ */
+airy_err_t grad_plan_schema_validate_tools(const cJSON *root, const char *plan_id,
+                                           const char *const *tools, size_t ntools,
+                                           grad_schema_err_t *err);
+
 #endif /* AIRY_HAS_CJSON */
 
 /**
