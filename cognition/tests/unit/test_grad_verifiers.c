@@ -370,7 +370,8 @@ void test_e05_verify_insufficient(void)
 void test_e04_guard_drift(void)
 {
     /* PASS：guard 节点 outputs（"deploy.plan"）与 goal 关键词（deploy/
-     * the/web/service，仅 >2 字符入集）有实体交集 → 判过。 */
+     * the/web/service；C-13 起按码点 ≥2 且含字母/数字/表意字入集）
+     * 有实体交集 → 判过。 */
     airy_gccp_goal_t goal;
     __builtin_memset(&goal, 0, sizeof(goal));
     goal.goal_endpoint = (char *)"deploy the web service";
@@ -438,6 +439,67 @@ void test_e04_guard_drift(void)
         TEST_FAIL("E-04 none", msg);
     }
     free_plan(nogoal);
+
+    /* SKIP：guard 只有 `artifact:` 引用签名，没有真实产物名可比 →
+     * 判 SKIP（NONE + n_degraded），不得把缺证据当成目标漂移。 */
+    airy_gccp_goal_t cgoal;
+    __builtin_memset(&cgoal, 0, sizeof(cgoal));
+    cgoal.goal_endpoint = (char *)"在285H目标机上安装 tree，并验证版本。";
+    const char *a_out[] = {"artifact:reactive_1_step2"};
+    airy_task_plan_t *refonly = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
+    refonly->task_plan_id = AIRY_STRDUP("guard_refonly");
+    refonly->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
+    refonly->task_plan_nodes[refonly->task_plan_node_count++] =
+        make_node("G4", "guard tree", "guard", NULL, 0, a_out, 1, 10, 1);
+    __builtin_memset(&report, 0, sizeof(report));
+    err = airy_grad_verify_plan_g(refonly, NULL, &cgoal, &report);
+    if (err == AIRY_SUCCESS && report.error == AIRY_GRAD_OK && report.errors == 0 &&
+        report.guard_state == AIRY_GRAD_GUARD_NONE && report.n_degraded == 1) {
+        TEST_PASS("E-04 with only artifact refs degrades to SKIP (n_degraded=1)");
+    } else {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "expected OK/SKIP, got err=%d error=%d guard=%u deg=%u",
+                 (int)err, (int)report.error, (unsigned)report.guard_state,
+                 (unsigned)report.n_degraded);
+        TEST_FAIL("E-04 refonly", msg);
+    }
+    /* `gate:lab` 等价：同一中文目标连续 10 轮，首轮起 E-04 拒绝率须为 0。 */
+    int rejects = 0;
+    for (int i = 0; i < 10; i++) {
+        __builtin_memset(&report, 0, sizeof(report));
+        err = airy_grad_verify_plan_g(refonly, NULL, &cgoal, &report);
+        if (err != AIRY_SUCCESS || report.error == AIRY_GRAD_E04_GUARD_DRIFT)
+            rejects++;
+    }
+    if (rejects == 0) {
+        TEST_PASS("E-04 ref-only goal rejects 0/10 rounds");
+    } else {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "expected 0 rejects, got %d/10", rejects);
+        TEST_FAIL("E-04 reject rate", msg);
+    }
+    free_plan(refonly);
+
+    /* 同一 goal 下若出现真实产物名且与关键词交集 → 仍判 PASS。 */
+    const char *m_out[] = {"artifact:reactive_1_step2", "tree-2.1.1.rpm"};
+    airy_task_plan_t *mixed = (airy_task_plan_t *)AIRY_CALLOC(1, sizeof(airy_task_plan_t));
+    mixed->task_plan_id = AIRY_STRDUP("guard_mixed");
+    mixed->task_plan_nodes = (airy_task_node_t **)AIRY_CALLOC(1, sizeof(airy_task_node_t *));
+    mixed->task_plan_nodes[mixed->task_plan_node_count++] =
+        make_node("G5", "guard tree", "guard", NULL, 0, m_out, 2, 10, 1);
+    __builtin_memset(&report, 0, sizeof(report));
+    err = airy_grad_verify_plan_g(mixed, NULL, &cgoal, &report);
+    if (err == AIRY_SUCCESS && report.error == AIRY_GRAD_OK &&
+        report.guard_state == AIRY_GRAD_GUARD_PASS && report.n_degraded == 0) {
+        TEST_PASS("E-04 real signature beside a ref still passes");
+    } else {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "expected OK/PASS, got err=%d error=%d guard=%u deg=%u",
+                 (int)err, (int)report.error, (unsigned)report.guard_state,
+                 (unsigned)report.n_degraded);
+        TEST_FAIL("E-04 mixed", msg);
+    }
+    free_plan(mixed);
 }
 
 /* Gate 32：位图 → 单值裁决的优先级梯。梯序为 E-02 > E-05 > E-01 >
