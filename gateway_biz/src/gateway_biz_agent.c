@@ -24,8 +24,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* agent.run 长耗时（LLM 往返 + 工具循环），转发超时取最大档 */
-#define GW_RUN_FWD_TIMEOUT_MS 600000
+/* agent.run 长耗时（LLM 往返 + 工具循环），转发取预算树最外层 client 层。 */
+#define GW_RUN_FWD_TIMEOUT_MS airy_budget_ms(AIRY_BUDGET_CLIENT)
 
 /**
  * @brief agent 域转发管道单源：params 序列化 -> SYS_SVC_CALL 派发 ->
