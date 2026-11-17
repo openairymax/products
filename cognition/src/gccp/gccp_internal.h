@@ -44,6 +44,23 @@ airy_gccp_probe_t *gccp_heur_probe(const char *input, size_t input_len);
 int gccp_is_simple(const char *input, size_t input_len);
 airy_gccp_goal_t *gccp_heur_goal(const char *input, size_t input_len);
 
+/* 动作分级（C-20）：probe 默认值反转的判据来源。分级只看指令文本中
+ * 出现的动作词，按 priv > install > write > read > unknown 取最高档；
+ * 只读强制不交互，写/装/提权强制确认，未知不覆盖模型判定。 */
+typedef enum {
+    GCCP_ACT_UNKNOWN = 0,
+    GCCP_ACT_READ = 1,
+    GCCP_ACT_WRITE = 2,
+    GCCP_ACT_INSTALL = 3,
+    GCCP_ACT_PRIV = 4
+} gccp_act_t;
+
+gccp_act_t gccp_act_class(const char *input, size_t input_len);
+
+/* 非交互流水线回退：AIRY_GCCP_ASSUME_NO_INTERACTION 严格等于 "1" 时，
+ * probe 一律强制 need_interaction=0 / question_count=0（绝不发问）。 */
+int gccp_silent(void);
+
 #ifdef __cplusplus
 }
 #endif

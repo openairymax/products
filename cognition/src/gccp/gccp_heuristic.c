@@ -158,3 +158,106 @@ airy_gccp_goal_t *gccp_heur_goal(const char *input, size_t input_len)
 {
     return gccp_prefill(input, input_len);
 }
+
+/* 词表命中：ASCII 词按前后非字母数字边界匹配（避免 rm 命中 form、ls 命中
+ * false），CJK 词按子串匹配（中文无词边界）。大小写不敏感。 */
+static int tok_hit(const char *s, const char *tok)
+{
+    size_t n = strlen(tok);
+    if (n == 0)
+        return 0;
+    int ascii = 1;
+    for (size_t i = 0; i < n; i++) {
+        if ((unsigned char)tok[i] >= 0x80) {
+            ascii = 0;
+            break;
+        }
+    }
+    for (const char *p = s; *p; p++) {
+        size_t i = 0;
+        while (i < n && p[i]) {
+            unsigned char a = (unsigned char)p[i];
+            unsigned char b = (unsigned char)tok[i];
+            if (a >= 'A' && a <= 'Z')
+                a = (unsigned char)(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z')
+                b = (unsigned char)(b - 'A' + 'a');
+            if (a != b)
+                break;
+            i++;
+        }
+        if (i != n)
+            continue;
+        if (!ascii)
+            return 1;
+        unsigned char prev = (p == s) ? ' ' : (unsigned char)p[-1];
+        unsigned char next = (unsigned char)p[n];
+        int prev_word = (prev >= 'a' && prev <= 'z') || (prev >= 'A' && prev <= 'Z') ||
+                        (prev >= '0' && prev <= '9') || prev == '_';
+        int next_word = (next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') ||
+                        (next >= '0' && next <= '9') || next == '_';
+        if (!prev_word && !next_word)
+            return 1;
+    }
+    return 0;
+}
+
+static int any_hit(const char *s, const char *const *words)
+{
+    for (int i = 0; words[i]; i++) {
+        if (tok_hit(s, words[i]))
+            return 1;
+    }
+    return 0;
+}
+
+/* 动作分级词表（C-20）：只收录会改变系统状态或需要特权的动词/命令；
+ * 纯问答动词（解释/分析/总结…）只进只读表，绝不进写表。 */
+static const char *const k_priv[] = {
+    "sudo", "su -", "chmod", "chown", "chgrp", "setcap", "visudo", "passwd",
+    "useradd", "userdel", "usermod", "systemctl", "iptables", "mkfs", "fdisk",
+    "parted", "mount", "umount", "reboot", "shutdown", "/etc/shadow",
+    "/etc/sudoers", "提权", "管理员权限", "root密码", "root 密码", NULL};
+
+static const char *const k_install[] = {
+    "安装", "卸载", "升级", "包管理", "apt", "apt-get", "dnf", "yum",
+    "pacman", "zypper", "pip install", "npm install", "npm i", "cargo install",
+    "gem install", "brew install", "upgrade", "uninstall", NULL};
+
+static const char *const k_write[] = {
+    "删除", "创建", "新建", "修改", "写入", "改写", "覆盖", "移动", "重命名",
+    "复制", "追加", "保存", "下载", "上传", "备份", "恢复", "清理", "格式化",
+    "部署", "配置", "启动", "停止", "重启", "编译", "构建", "提交", "推送",
+    "rm", "mv", "cp", "mkdir", "rmdir", "touch", "tee", "truncate", "ln",
+    "sed -i", "dd if=", "kill", "delete", "remove", "create", "modify",
+    "rename", "move", "copy", "save", "upload", "download", "deploy",
+    "restart", "reload", "commit", "push", "build", "compile", NULL};
+
+static const char *const k_read[] = {
+    "查看", "读取", "列出", "显示", "查找", "搜索", "分析", "统计", "汇总",
+    "解释", "说明", "介绍", "总结", "翻译", "计算", "查询", "对比", "比较",
+    "阅读", "检查", "验证", "审计", "read", "list", "show", "cat", "grep",
+    "find", "ls", "analyze", "analyse", "explain", "summarize", "translate",
+    "calculate", "search", "query", "diff", "head", "tail", "wc", "inspect",
+    NULL};
+
+gccp_act_t gccp_act_class(const char *input, size_t input_len)
+{
+    if (!input || input_len == 0)
+        return GCCP_ACT_UNKNOWN;
+    if (any_hit(input, k_priv))
+        return GCCP_ACT_PRIV;
+    if (any_hit(input, k_install))
+        return GCCP_ACT_INSTALL;
+    if (any_hit(input, k_write))
+        return GCCP_ACT_WRITE;
+    if (any_hit(input, k_read))
+        return GCCP_ACT_READ;
+    return GCCP_ACT_UNKNOWN;
+}
+
+int gccp_silent(void)
+{
+    const char *env = getenv("AIRY_GCCP_ASSUME_NO_INTERACTION");
+    return env && env[0] == '1' && env[1] == '\0';
+}

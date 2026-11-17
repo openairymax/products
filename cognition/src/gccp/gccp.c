@@ -37,6 +37,44 @@
 #include <cjson/cJSON.h>
 #endif
 
+/* 动作分级守卫（C-20）：probe 默认值反转的唯一裁决点。模型与启发式给出
+ * 的 need_interaction 只是初值，必须经本函数按指令文本的动作档位收敛：
+ *   - 只读（READ）：强制不交互、清空问题集（只读动作不得弹确认）；
+ *   - 写/装/提权（WRITE/INSTALL/PRIV）：强制交互；模型没给问题时种入一条
+ *     verify 必答问题（高危动作在无确认时不得执行）；
+ *   - 未知（UNKNOWN）：不覆盖，保留模型/启发式的判定；
+ *   - AIRY_GCCP_ASSUME_NO_INTERACTION=1：整体回退为绝不发问。
+ * 所有返回 probe 的路径（简单门/无闭包/LLM 失败/解析失败/最终解析）都必须
+ * 调用本函数，否则短命令（如 sudo rm）会因简单门绕过确认。 */
+static void probe_guard(airy_gccp_probe_t *probe, const char *input, size_t input_len)
+{
+    if (!probe)
+        return;
+    if (gccp_silent()) {
+        probe->need_interaction = 0;
+        probe->question_count = 0;
+        return;
+    }
+    gccp_act_t act = gccp_act_class(input, input_len);
+    if (act == GCCP_ACT_READ) {
+        probe->need_interaction = 0;
+        probe->question_count = 0;
+        return;
+    }
+    if (act == GCCP_ACT_WRITE || act == GCCP_ACT_INSTALL || act == GCCP_ACT_PRIV) {
+        probe->need_interaction = 1;
+        if (probe->question_count == 0 && probe->questions) {
+            airy_gccp_question_t *q = &probe->questions[0];
+            snprintf(q->id, sizeof(q->id), "verify");
+            snprintf(q->question, sizeof(q->question),
+                     "该操作会修改系统状态，执行前请确认：期望的结果与可验证的验收标准是什么？");
+            snprintf(q->hint, sizeof(q->hint), "说明预期结果、影响范围与回滚方式");
+            q->required = 1;
+            probe->question_count = 1;
+        }
+    }
+}
+
 airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const char *model,
                       const char *input, size_t input_len, airy_gccp_probe_t **out_probe)
 {
@@ -67,8 +105,10 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
             return AIRY_ENOMEM;
         }
         probe->need_interaction = 0;
+        probe_guard(probe, input, input_len);
         *out_probe = probe;
-        AIRY_LOG_INFO("GCCP: simple chat detected, skip interaction (len=%zu)", input_len);
+        AIRY_LOG_INFO("GCCP: simple chat gate (interaction=%d, len=%zu)",
+                      probe->need_interaction, input_len);
         return AIRY_EOK;
     }
 
@@ -77,6 +117,7 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
         *out_probe = gccp_heur_probe(input, input_len);
         if (!*out_probe)
             return AIRY_ENOMEM;
+        probe_guard(*out_probe, input, input_len);
         AIRY_LOG_INFO("GCCP: probe degraded (no LLM), questions=%zu", (*out_probe)->question_count);
         return AIRY_EOK;
     }
@@ -94,14 +135,17 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
         "\"question\":\"question to ask user in Chinese\","
         "\"hint\":\"answer direction\",\"required\":0|1}]}. "
         "CRITICAL RULES: "
-        "1) For greetings, self-introductions, casual chat, opinion/QA questions, and "
-        "simple single-step requests (e.g. 'introduce yourself', 'hello', 'what is X'), "
-        "you MUST return need_interaction=0 with an EMPTY questions array, filling "
-        "prefill directly from the request. "
-        "2) need_interaction=1 ONLY for genuinely complex multi-step tasks where the "
-        "endpoint, starting state, constraints, or acceptance criteria are unclear "
-        "and executing without them would produce a wrong result. "
-        "3) When in doubt, prefer need_interaction=0 — the goal is assumed clear. "
+        "1) For read-only requests (inspection, lookup, search, analysis, explanation, "
+        "translation, summarization, opinion/QA questions, greetings, "
+        "self-introductions), you MUST return need_interaction=0 with an EMPTY "
+        "questions array, filling prefill directly from the request. "
+        "2) need_interaction=1 is MANDATORY for any request that writes, deletes, "
+        "moves, installs, upgrades, configures the system, or needs privileged "
+        "access - confirmation must precede any state change. Also use 1 for "
+        "genuinely complex multi-step tasks where the endpoint, starting state, "
+        "constraints, or acceptance criteria are unclear. "
+        "3) When in doubt, prefer need_interaction=1 unless the request is clearly "
+        "read-only or pure Q&A. "
         "For each unclear dimension, add one question. Always include the 'verify' "
         "dimension question (verifiable completion criteria) when interaction is "
         "needed. Limit questions to 5, do not repeat ids. Use Chinese for question/hint.";
@@ -110,6 +154,7 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
         *out_probe = gccp_heur_probe(input, input_len);
         if (!*out_probe)
             return AIRY_ENOMEM;
+        probe_guard(*out_probe, input, input_len);
         return AIRY_EOK;
     }
 
@@ -119,6 +164,7 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
         *out_probe = gccp_heur_probe(input, input_len);
         if (!*out_probe)
             return AIRY_ENOMEM;
+        probe_guard(*out_probe, input, input_len);
         return AIRY_EOK;
     }
 
@@ -129,6 +175,7 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
         *out_probe = gccp_heur_probe(input, input_len);
         if (!*out_probe)
             return AIRY_ENOMEM;
+        probe_guard(*out_probe, input, input_len);
         return AIRY_EOK;
     }
 
@@ -213,6 +260,7 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
     }
 
     cJSON_Delete(root);
+    probe_guard(probe, input, input_len);
     *out_probe = probe;
     AIRY_LOG_INFO("GCCP: probe confirmed via LLM (need_interaction=%d, questions=%zu)",
                   probe->need_interaction, probe->question_count);
@@ -223,6 +271,7 @@ airy_err_t gccp_probe(airy_gccp_complete_fn complete, void *complete_ctx, const 
     *out_probe = gccp_heur_probe(input, input_len);
     if (!*out_probe)
         return AIRY_ENOMEM;
+    probe_guard(*out_probe, input, input_len);
     return AIRY_EOK;
 #endif
 }
