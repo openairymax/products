@@ -56,6 +56,9 @@ extern "C" {
 #define GRAD_DEPENDS_MAX GRAD_MAX_NODES
 #define GRAD_INPUTS_MAX 16
 #define GRAD_OUTPUTS_MAX 8
+/* C-12：执行映射面边界（handler 工具名 / params 序列化文本上界） */
+#define GRAD_HANDLER_MAX 64
+#define GRAD_PARAMS_MAX 4096
 
 /* 取值域 */
 #define GRAD_COST_MAX 1000000.0

@@ -50,7 +50,25 @@
           "cost_mem_mb": { "type": "integer", "minimum": 1, "maximum": 1000000 },
           "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 600000, "default": 30000 },
           "priority": { "type": "integer", "minimum": 0, "maximum": 255, "default": 150 },
-          "invariant_guard": { "type": "boolean", "default": false }
+          "invariant_guard": { "type": "boolean", "default": false },
+          "handler": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+            "description": "可执行节点的工具名（如 shell_run）；缺省时 role=act 映射为 shell_run"
+          },
+          "params": {
+            "oneOf": [
+              { "type": "string", "maxLength": 4096 },
+              { "type": "object" },
+              { "type": "array" }
+            ],
+            "description": "handler 参数包：JSON 文本字符串或内联对象/数组"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["exec", "verify", "report"],
+            "description": "节点执行类别；缺省按角色推断（act→exec，verify→verify，其余→report）；exec 必须有 handler 或 role=act"
+          }
         }
       }
     },
