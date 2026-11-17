@@ -194,6 +194,58 @@ static bool grad_input_ok(const cJSON *nodes, int idx, const char *input,
     return true;
 }
 
+/* C-12：执行映射面（handler/params/kind）。三者均可缺省——handler 缺省
+ * 由角色映射补（act → shell_run），kind 缺省按角色推断，故本层只判「给
+ * 出即须合规」。kind=exec 必须有落点：显式 handler，或 role=act 走缺省
+ * 映射；二者皆无即缺陷计划，schema 层直接拒绝，不放进执行层空转。 */
+static bool grad_exec_ok(const cJSON *nd, grad_schema_err_t *err, int idx)
+{
+    static const char *const kinds[] = {"exec", "verify", "report"};
+    cJSON *handler = cJSON_GetObjectItem(nd, "handler");
+    cJSON *params = cJSON_GetObjectItem(nd, "params");
+    cJSON *kind = cJSON_GetObjectItem(nd, "kind");
+    bool has_handler = handler && !cJSON_IsNull(handler);
+    bool kind_exec = false;
+
+    if (has_handler &&
+        (!cJSON_IsString(handler) ||
+         !grad_pat(handler->valuestring, GRAD_HANDLER_MAX, true, true))) {
+        grad_serr_set(err, idx, "handler", "pattern");
+        return false;
+    }
+    if (params && !cJSON_IsNull(params) && !cJSON_IsString(params) &&
+        !cJSON_IsObject(params) && !cJSON_IsArray(params)) {
+        grad_serr_set(err, idx, "params", "type");
+        return false;
+    }
+    if (params && cJSON_IsString(params) && params->valuestring &&
+        strlen(params->valuestring) > GRAD_PARAMS_MAX) {
+        grad_serr_set(err, idx, "params", "range");
+        return false;
+    }
+    if (kind && !cJSON_IsNull(kind)) {
+        bool ok = false;
+        if (cJSON_IsString(kind) && kind->valuestring) {
+            for (int k = 0; k < 3; k++)
+                ok = ok || strcmp(kind->valuestring, kinds[k]) == 0;
+            kind_exec = ok && strcmp(kind->valuestring, "exec") == 0;
+        }
+        if (!ok) {
+            grad_serr_set(err, idx, "kind", "enum");
+            return false;
+        }
+    }
+    if (kind_exec && !has_handler) {
+        cJSON *role = cJSON_GetObjectItem(nd, "role");
+        if (!cJSON_IsString(role) || !role->valuestring ||
+            strcmp(role->valuestring, "act") != 0) {
+            grad_serr_set(err, idx, "handler", "missing_for_exec");
+            return false;
+        }
+    }
+    return true;
+}
+
 /* JSON 层：单节点字段域检查（独立可判定项，不跨节点） */
 static bool grad_check_node(const cJSON *nd, grad_schema_err_t *err, int idx)
 {
@@ -213,6 +265,8 @@ static bool grad_check_node(const cJSON *nd, grad_schema_err_t *err, int idx)
         grad_serr_set(err, idx, "role", "enum");
         return false;
     }
+    if (!grad_exec_ok(nd, err, idx))
+        return false;
     cJSON *deps = cJSON_GetObjectItem(nd, "depends");
     if (deps && !cJSON_IsNull(deps) &&
         !grad_str_arr(deps, GRAD_DEPENDS_MAX, GRAD_NODE_ID_MAX)) {
