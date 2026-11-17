@@ -34,6 +34,9 @@ from the mechanism kernel:
 - **gateway_biz** — the gateway business handler: unified capability dispatch,
   namespace forwarding, protocol backends and the PEP verdict cache, embedded
   into `gateway_d`.
+- **canary** — the canary self-evolution gate: five-state machine, blast radius
+  guard, overlay manifest and kill switch, mounted by `cupolas` through
+  `dpolicy_canary_ops_t`.
 
 This repository follows the platform's **mechanism / policy separation**
 principle: the mechanism kernel lives in

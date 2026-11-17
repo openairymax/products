@@ -26,6 +26,8 @@
   启动期注入。
 - **gateway_biz** —— 网关业务处理面：统一能力派发、命名空间转发、协议后端、
    PEP 裁定缓存，嵌入式装配进 `gateway_d`。
+- **canary** —— 金丝雀自演进门控：五态状态机、爆炸半径护栏、叠加清单与熔断
+   开关，由 `cupolas` 经 `dpolicy_canary_ops_t` 挂载。
 
 本仓遵循平台的**机制 / 策略分离**原则：机制核位于
 [`agentrt/`](../agentrt)（atoms · commons · daemons · gateway · heapstore ·

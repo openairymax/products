@@ -1,8 +1,9 @@
 [submodule "memoryrovol"]
-        path = memoryrovol
-        url = git@atomgit.com:openairymax/memoryrovol.git
-        branch = dev/hubs-01
-        update = none
+	path = memoryrovol
+	url = git@atomgit.com:openairymax/memoryrovol.git
+	branch = dev/hubs-01
+	# 闭源商业件：默认不随仓拉取（需授权后手工 init），故 update = none
+	update = none
 [submodule "cupolas"]
 	path = cupolas
 	url = ../cupolas.git
