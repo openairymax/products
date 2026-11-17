@@ -88,6 +88,30 @@ char *handle_agent_run(cJSON *root, gateway_business_ctx_t *ctx)
 }
 
 /**
+ * @brief task.submit 转发（C-15 统一任务编排入口）：goal / resume_token
+ *        二者其一存在即原样透传 agent_d "task_submit"。模式裁决、GCCP
+ *        门禁、计划宣告与执行均在 daemon 内完成；未确认目标返回
+ *        needs_intent（零工具调用），gateway 不做任何业务判断。
+ */
+char *handle_task_submit(cJSON *root, gateway_business_ctx_t *ctx)
+{
+    (void)ctx; /* 端点解析统一由 svc dispatch 钩子按命名空间完成 */
+    cJSON *id = cJSON_GetObjectItem(root, "id");
+    cJSON *params = cJSON_GetObjectItem(root, "params");
+    if (!params)
+        return jsonrpc_error(-32602, "Invalid params: missing params", id);
+
+    cJSON *goal = cJSON_GetObjectItem(params, "goal");
+    cJSON *resume = cJSON_GetObjectItem(params, "resume_token");
+    int has_goal = cJSON_IsString(goal) && goal->valuestring && goal->valuestring[0];
+    int has_resume = cJSON_IsString(resume) && resume->valuestring && resume->valuestring[0];
+    if (!has_goal && !has_resume)
+        return jsonrpc_error(-32602, "Invalid params: missing goal or resume_token", id);
+
+    return agent_svc_forward(root, "task_submit", GW_RUN_FWD_TIMEOUT_MS);
+}
+
+/**
  * @brief agent.cancel 转发：params.session_id 原样透传 agent_d "run_cancel"，
  *        响应 id 重写为请求 id。
  */
