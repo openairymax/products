@@ -114,6 +114,12 @@ void test_grad_c11_contract(void);
 void test_grad_t3_patch_prompt(void);
 void test_grad_t4_stream(void);
 
+/* 0.1.21 C-9 可解析性提升（test_grad_misc.c） */
+void test_c9_samples(void);
+void test_c9_fence(void);
+void test_c9_switch(void);
+void test_c9_repeat(void);
+
 /* GRAD 计划 schema v1 校验域（test_grad_schema.c，0.1.20 C1） */
 void test_schema_valid_full(void);
 void test_schema_optional_metadata(void);
