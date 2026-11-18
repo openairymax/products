@@ -65,7 +65,10 @@ const gw_cap_t *gw_cap_find(const char *cap_key);
 int gw_cap_ns_validate(void);
 
 /**
- * @brief 按命名空间取转发超时（ms；未知命名空间返回默认 90s）。
+ * @brief 按命名空间取转发超时（ms；未知命名空间返回 GW_TOOL_TIMEOUT_MS）。
+ *
+ * 策略表按 0.1.21 C-21 只声明预算层（"budget:<tier>"），毫秒值在调用时
+ * 由预算树解析，与 llm_d/tool_d 共用同一真值源。
  */
 int gw_cap_ns_timeout(const char *ns);
 
