@@ -88,11 +88,33 @@ const gw_cap_t *gw_cap_find(const char *cap_key)
     return NULL;
 }
 
+/* 预算层哨兵 → 毫秒（唯一解析点）：生成表只存常量，取值在这里发生，
+ * 保证「清单声明层 → 运行期毫秒」单向，不再有第二份写死的超时值。 */
+static int budget_tier_ms(int tier)
+{
+    switch (tier) {
+    case GW_TMO_BUDGET_CLIENT:
+        return (int)airy_budget_ms(AIRY_BUDGET_CLIENT);
+    case GW_TMO_BUDGET_SERVER:
+        return (int)airy_budget_ms(AIRY_BUDGET_SERVER);
+    case GW_TMO_BUDGET_PROVIDER:
+        return (int)airy_budget_ms(AIRY_BUDGET_PROVIDER);
+    case GW_TMO_BUDGET_TOOL:
+        return (int)airy_budget_ms(AIRY_BUDGET_TOOL);
+    case GW_TMO_BUDGET_TOOL_OUTER:
+        return (int)airy_budget_outer(airy_budget_ms(AIRY_BUDGET_TOOL));
+    default:
+        return GW_TOOL_TIMEOUT_MS;
+    }
+}
+
 int gw_cap_ns_timeout(const char *ns)
 {
     const gw_ns_pol_t *pol = gw_ns_pol(ns);
 
-    return pol ? (int)pol->timeout_ms : GW_TOOL_TIMEOUT_MS;
+    if (!pol)
+        return GW_TOOL_TIMEOUT_MS;
+    return pol->timeout_ms < 0 ? budget_tier_ms(pol->timeout_ms) : pol->timeout_ms;
 }
 
 int gw_cap_version(const char *cap_key)

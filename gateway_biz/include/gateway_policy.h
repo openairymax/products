@@ -23,13 +23,22 @@ extern "C" {
 /* 策略表容量上限（生成期静态断言，运行期零分配）。 */
 #define GW_NS_POL_MAX 32
 
+/* 预算层哨兵（0.1.21 C-21）：清单写 "budget:<tier>" 时生成表落为负值，
+ * 运行期由 gw_cap_ns_timeout 到预算树取毫秒。静态初始化不允许函数调用，
+ * 故不能把 airy_budget_ms() 直接写进表里；正值仍表示固定毫秒。 */
+#define GW_TMO_BUDGET_CLIENT (-1)
+#define GW_TMO_BUDGET_SERVER (-2)
+#define GW_TMO_BUDGET_PROVIDER (-3)
+#define GW_TMO_BUDGET_TOOL (-4)
+#define GW_TMO_BUDGET_TOOL_OUTER (-5)
+
 /* 命名空间策略项（字段顺序与生成表一致）。 */
 typedef struct {
     const char *ns;         /* 外部命名空间前缀 */
     const char *owner;      /* 独占 daemon 短名（gateway = 网关内实现域） */
     const char *daemon;     /* 路由宿主进程名（非路由为 NULL） */
     const char *sock;       /* ctx 端点绑定键（非路由为 NULL） */
-    unsigned int timeout_ms;
+    int timeout_ms;         /* 固定毫秒；负值为 GW_TMO_BUDGET_* 预算层 */
     const char *prefix;     /* wire 方法前缀（无前缀为 NULL） */
     int l2_pass;            /* L2 三件套透传宿主 */
     int route;              /* 可经 syscall 派发 */
