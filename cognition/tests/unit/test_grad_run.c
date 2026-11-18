@@ -426,7 +426,11 @@ void test_run_fbseed(void)
     gr_fake_t f = {.a_json = GR_PLAN_BADROLE, .b_json = GR_ACC};
     airy_grad_outcome_t oc;
     airy_err_t err = gr_exec(&f, 0, NULL, &oc);
+#if defined(_WIN32)
+    _putenv_s("AIRY_GRAD_FALLBACK_AS_SEED", "");
+#else
     unsetenv("AIRY_GRAD_FALLBACK_AS_SEED");
+#endif
     TEST_CHECK(err == AIRY_EFAIL, "legacy fallback must be rejected by P1");
     TEST_CHECK(oc.degraded == 1, "legacy fallback marks degraded");
     TEST_CHECK(oc.stats.stage == GRAD_STAGE_GEN, "fallback attributes to gen");
