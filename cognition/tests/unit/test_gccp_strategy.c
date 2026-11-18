@@ -528,7 +528,11 @@ static int test_gccp_guard_silent(void)
     setenv("AIRY_GCCP_ASSUME_NO_INTERACTION", "1", 1);
     const char *input = "删除 /tmp/a.txt";
     airy_err_t err = gccp_probe(fake_complete, &fake, NULL, input, strlen(input), &probe);
+#if defined(_WIN32)
+    _putenv_s("AIRY_GCCP_ASSUME_NO_INTERACTION", "");
+#else
     unsetenv("AIRY_GCCP_ASSUME_NO_INTERACTION");
+#endif
 
     CHECK(err == AIRY_EOK, "silent probe -> EOK", "expected EOK");
     CHECK(probe && probe->need_interaction == 0 && probe->question_count == 0,
