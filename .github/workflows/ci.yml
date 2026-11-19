@@ -1,0 +1,62 @@
+name: CI
+
+# products 是产品装配仓：六模块（canary/cognition/cupolas/gateway_biz/
+# lang_gateway/memoryrovol）为 C 产品层，其中 cupolas/memoryrovol 是
+# 子模块、其余直接追踪。模块的编译与测试由 agentrt 主仓构建系统统一
+# 装配执行（release 流水线覆盖），本仓不重复构建。
+# 流水线体系 L1 仓内快速门禁，1 作业 = 装配完整性失败域：
+#   - 递归子模块按 pin 拉取（pin 指向不可达提交即红，防指针漂移）
+#   - 六模块目录非空 fail-closed（防空装配/误删）
+#   - .gitmodules 与 gitlink 一致性
+# 作业数 ≤3 是本仓流水线判据；纯文档变更跳过。
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - '**/*.md'
+      - 'docs/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assembly-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Modules must be non-empty (fail-closed)
+        run: |
+          for m in canary cognition cupolas gateway_biz lang_gateway memoryrovol; do
+            n=$(find "$m" -type f ! -path '*/.git/*' | wc -l)
+            [ "$n" -gt 0 ] || { echo "::error::$m is empty"; exit 1; }
+            echo "[OK] $m: $n files"
+          done
+      - name: gitlink and .gitmodules must agree
+        run: |
+          rc=0
+          for m in memoryrovol cupolas; do
+            git ls-files --stage "$m" | grep -q 160000 \
+              || { echo "::error::$m not a gitlink entry"; rc=1; }
+            grep -q "path = $m" .gitmodules \
+              || { echo "::error::$m missing from .gitmodules"; rc=1; }
+          done
+          exit $rc
+      - name: C source surface must exist (fail-closed)
+        run: |
+          for m in canary cognition gateway_biz lang_gateway cupolas memoryrovol; do
+            ls "$m"/*.c "$m"/*.h >/dev/null 2>&1 \
+              || find "$m" -name '*.c' -o -name '*.h' | grep -q . \
+              || { echo "::error::$m has no C sources"; exit 1; }
+          done
+          echo '[OK] C source surface present in all modules'
