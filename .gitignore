@@ -11,6 +11,8 @@
 !.gitignore
 !.gitmodules
 !.mailmap
+!.github
+!.github/**
 !LICENSE
 !NOTICE
 !README.md
