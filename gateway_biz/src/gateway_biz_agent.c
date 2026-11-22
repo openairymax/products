@@ -49,9 +49,20 @@ static char *agent_svc_forward(cJSON *root, const char *method, long timeout_ms)
         return jsonrpc_error(-32603, "Agent service unreachable", id);
 
     cJSON *rroot = cJSON_Parse(resp);
-    AIRY_FREE(resp);
-    if (!rroot)
+    if (!rroot) {
+        char head[81];
+        size_t i = 0;
+        for (; i < sizeof(head) - 1 && resp[i]; i++) {
+            unsigned char ch = (unsigned char)resp[i];
+            head[i] = (ch >= 0x20 && ch < 0x7f) ? (char)ch : '.';
+        }
+        head[i] = '\0';
+        AIRY_LOG_WARN("agent forward: malformed response method=%s len=%zu head=%s", method,
+                      strlen(resp), head);
+        AIRY_FREE(resp);
         return jsonrpc_error(-32603, "Agent service returned invalid response", id);
+    }
+    AIRY_FREE(resp);
 
     return jsonrpc_emit(rroot, id);
 }
