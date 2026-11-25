@@ -29,6 +29,12 @@ foreach(_tgt gateway_policy_gen svc_common airy_protocols)
     endif()
 endforeach()
 
+# 裸名解析面 SSoT 由宿主 include gateway/cmake/gateway-sources.cmake 提供
+if(NOT GATEWAY_COMMON_INCLUDE_DIRS)
+    message(FATAL_ERROR
+        "gateway_biz: 宿主须先 include gateway/cmake/gateway-sources.cmake")
+endif()
+
 set(_rt "${AIRY_GATEWAY_BIZ_AGENTRT_ROOT}")
 set(_gw "${_rt}/gateway")
 
@@ -55,7 +61,8 @@ target_include_directories(airy_gateway_biz PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${_gw}/include
     ${_gw}/src
-    ${_gw}/src/gateway
+    # src/gateway 分层后的裸名解析面（与 gateway 模块共用 SSoT 清单）
+    ${GATEWAY_COMMON_INCLUDE_DIRS}
     ${_gw}/src/utils
     ${_gw}/src/utils/syscall
     ${_rt}/atoms/syscall/include
