@@ -31,7 +31,7 @@
 
 #include "gateway_biz_internal.h"
 
-#include "gateway/gateway_hall_store.h"
+#include "gateway_hall_store.h"
 #include "syscalls.h"
 
 #include "hall_event.h"
