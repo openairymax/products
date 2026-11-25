@@ -57,6 +57,12 @@ set(GBIZ_SOURCES
 add_library(airy_gateway_biz STATIC ${GBIZ_SOURCES})
 add_dependencies(airy_gateway_biz gateway_policy_gen)
 
+# 业务面直接消费 cJSON 与 commons 读侧原语（hall 压平、整文件读取），
+# 必须与 gateway 模块同口径声明该能力宏，否则被守卫的声明不可见。
+if(AIRY_HAS_CJSON)
+    target_compile_definitions(airy_gateway_biz PRIVATE AIRY_HAS_CJSON=1)
+endif()
+
 target_include_directories(airy_gateway_biz PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${_gw}/include
@@ -88,6 +94,7 @@ target_include_directories(airy_gateway_biz PUBLIC
     ${_rt}/commons/utils/network
     ${_rt}/commons/utils/ipc
     ${_rt}/commons/utils/hall
+    ${_rt}/commons/utils/io
     ${_rt}/commons/utils/types
     ${_rt}/protocols/include
     ${_rt}/protocols/common/include

@@ -35,6 +35,7 @@
 #include "syscalls.h"
 
 #include "hall_event.h"
+#include "io.h"
 #include "logging.h"
 #include "platform.h"
 #include "airy_dirent.h"
@@ -187,11 +188,12 @@ static int gw_hall_collect_file(const char *path, const char *name, gw_hall_evt_
     AIRY_MEMCPY(ts_utc, parts.ts_utc, tlen);
     ts_utc[tlen] = '\0';
 
-    char *json = hall_event_flatten(path);
+    char *json = hall_evt_flat_file(path);
     if (!json)
         return -1;
-    /* gseq lives in the file header; flatten() puts it ahead of `content`, so
-     * the ledger-wide write counter is available without a second parse. */
+    /* gseq lives in the file header; the flatten step puts it ahead of
+     * `content`, so the ledger-wide write counter is available without a
+     * second parse. */
     gw_hall_evt_push(out, ts_utc, hall_evt_seq(name), hall_evt_gseq_of(json), json);
     return 0;
 }
@@ -273,7 +275,7 @@ static void gw_hall_board_fill(cJSON *entries)
         cJSON *e = cJSON_Parse(evts.items[i].json);
         if (!e)
             continue;
-        /* 事件在 hall.* 出口已由 hall_event_flatten 摊平：task_id 与
+        /* 事件在 hall.* 出口已由 hall_evt_flat_file 摊平：task_id 与
          * content 都在顶层，没有 "file" 信封（replay/stream 同形态）。 */
         const cJSON *content = cJSON_GetObjectItem(e, "content");
         const cJSON *tid = cJSON_GetObjectItem(e, "task_id");
@@ -357,8 +359,8 @@ static char *gw_hall_board(const gateway_business_ctx_t *ctx, const cJSON *id)
 
     char state_path[GW_HALL_PATH_MAX];
     gw_hall_state_path(state_path, sizeof(state_path));
-    char *raw = gw_hall_read_file(state_path);
-    if (raw) {
+    char *raw = NULL;
+    if (airy_io_read_file(state_path, &raw, NULL) == 0 && raw) {
         cJSON *state = cJSON_Parse(raw);
         AIRY_FREE(raw);
         if (state) {
